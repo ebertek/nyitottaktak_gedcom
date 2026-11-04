@@ -647,6 +647,11 @@ def run(args: argparse.Namespace) -> None:
         if person.xref in completed and not args.refresh:
             skipped_from_checkpoint += 1
             continue
+        if args.refresh and person.xref in completed:
+            # Do not leave a previously completed entry looking current if
+            # the fresh query is interrupted before this person finishes.
+            completed.pop(person.xref)
+            persist()
         names = candidate_names(person)
         mothers = mother_names(person, people, families)
         year = birth_year(person.born)
