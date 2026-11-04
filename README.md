@@ -120,6 +120,27 @@ The output CSV includes `archive_source_summary` and `archive_interpretation_lim
 
 For additional historical verification, the archive directs researchers to [ÁBTL research](https://www.abtl.hu/kutatas/) and its [records-access portal](https://lar.abtl.hu/ords/r/abtl/sb/home).
 
+## Search coverage audit
+
+A scan can encounter rejected filters, `too_many` responses, or interrupted requests. The candidate CSV alone does not show which relatives were fully searched, so the tool maintains a **second local report**: `nyitottaktak_matches.coverage.csv`. It includes one row per selected eligible GEDCOM person, their search status, number of raw hits/candidates, archive update date, and any search warnings.
+
+| Status | Meaning |
+| --- | --- |
+| `completed` | All planned requests for this person finished with no reported query limitations. **Not** proof that every relevant archival record was found. |
+| `limited` | The person is checkpointed but one or more queries returned `too_many`, a recoverable HTTP 400, or an invalid name variant. The result set may be incomplete. |
+| `not_completed` | The person is not checkpointed, because the scan has not reached them or was interrupted/failed. |
+
+Generate or regenerate coverage **without contacting Nyitott Akták**:
+
+```bash
+python nyitottaktak_gedcom.py 'Family Tree.ged' \
+  --all --exhaustive --coverage-only
+```
+
+The offline audit compares the GEDCOM and selected search settings with your checkpoint. Use the same `--exhaustive`, `--year-tolerance` and `--min-score` options as the original scan, or the checkpoint configuration check will reject it. `--coverage-only` does not require `--execute`, does not call `/api/meta`, and does not change checkpoints. During an ordinary `--execute` scan, the coverage CSV is updated after each fully completed person. Pass `--coverage-output another-private-file.csv` to change the report path.
+
+A `limited` entry is not re-queried automatically, because a `too_many` query could remain inherently broad. Manually inspect the reported warnings, narrow identity filters or adjust your search strategy, then explicitly refresh the selected individual if needed. Existing checkpoints from earlier script versions may lack old HTTP 400 warnings; the new report cannot reconstruct historical warnings that were never saved.
+
 ## Output
 
 The default report is `nyitottaktak_matches.csv`, with both GEDCOM and archive identity fields, a **heuristic review score**, a rationale, query URL and original document URL. Scores prioritize review; **they are not probabilities or judgments about historical conduct**. The separate source context columns explain document types but never determine whether a particular person cooperated. Errors and incomplete queries are written to `nyitottaktak_matches.errors.txt` when applicable. `--verbose` shows each outgoing filter set and the result count, which is useful for investigating zero-hit queries.
