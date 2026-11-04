@@ -116,11 +116,8 @@ class GedcomTests(unittest.TestCase):
         self.assertIn("birthplace exact", evidence)
 
     def test_person_id_selects_specific_relative(self):
-        args = SimpleNamespace(
-            gedcom=self.path, person_id=["@I1@"], include_undated=False,
-            since=1850, until=1975, order="historical", max_people=5,
-            execute=False,
-        )
+        args = self.scan_args(["@I1@"])
+        args.execute = False
         output = io.StringIO()
         with contextlib.redirect_stdout(output):
             finder.run(args)
