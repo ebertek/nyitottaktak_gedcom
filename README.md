@@ -27,6 +27,14 @@ python nyitottaktak_gedcom.py 'Family Tree.ged' --execute \
 # Broader queries and accentless name variants (more requests)
 python nyitottaktak_gedcom.py 'Family Tree.ged' --execute \
   --exhaustive --max-people 30 --delay 2
+
+# Search EVERY eligible person in a single invocation, with no local request cap
+python nyitottaktak_gedcom.py 'Family Tree.ged' --execute \
+  --all --exhaustive --delay 2
+
+# Also include people without a known birth year (more broad searches)
+python nyitottaktak_gedcom.py 'Family Tree.ged' --execute \
+  --all --include-undated --exhaustive --delay 2
 ```
 
 The default order prioritizes birth years close to 1930; it is **not** the same as GEDCOM file order. Use `--order gedcom` to preserve the file order, or `--person-id` to select particular relatives directly. By default, people without birth years are excluded; `--include-undated` opts them in. Individuals without usable surnames are always excluded.
@@ -51,7 +59,11 @@ The checkpoint verifies the GEDCOM file contents and search-affecting settings. 
 
 Keep the checkpoint and CSV private. Neither contains a verified conclusion about historical conduct.
 
-The default `--max-people` is 30 and `--max-requests` is 250. A local cache (`.nyitottaktak_cache/`) prevents duplicate requests on reruns. `--refresh` bypasses it. The minimum delay is 0.5 seconds between uncached requests; use a longer delay for large trees. Respect the archive operator's limits and stop on access-control or rate-limit responses.
+The default `--max-people` is 30 and `--max-requests` is 250. **These are application safety defaults, not limits from Nyitott Akták**. Set either to `0` to disable just that local limit (e.g. `--max-people 0 --max-requests 0`), or use `--all` to disable both. `--all` still respects the GEDCOM eligibility range (`--since` and `--until`), surname requirements, and whether `--include-undated` is set.
+
+The server may separately return `too_many`, impose access limits, or specify a maximum result count for an individual query. The script no longer **assumes** a 250-result pagination cap when `max_results` is missing; it follows reported `total` and `page_size`. Unlimited local budgets do **not** override server-side protections.
+
+A local cache (`.nyitottaktak_cache/`) prevents duplicate requests on reruns. `--refresh` bypasses it. The minimum delay is 0.5 seconds between uncached requests; **2 seconds or more is advisable for a large tree**. Requests are sequential, never parallel. Respect the archive operator's limits; a 403/429 response stops further searches. A transient network or server error can leave the affected person unfinished, to be retried on the next run.
 
 ### GEDCOM fields
 
