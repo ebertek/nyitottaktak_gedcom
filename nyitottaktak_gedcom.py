@@ -20,7 +20,7 @@ import sys
 import time
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -28,6 +28,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 API = "https://nyitottaktak.hu/api/search"
+API_META = "https://nyitottaktak.hu/api/meta"
 DEFAULT_FIRST_YEAR = 1850
 DEFAULT_LAST_YEAR = 1975
 # These are explicit frontend validation bounds in nyitottaktak.hu's search.js.
@@ -403,21 +404,14 @@ class ApiClient:
         self.http_400 = 0
         self.cached_responses = 0
 
-    def fetch(self, params: dict) -> dict:
-        filtered = {k: v for k, v in params.items() if v not in (None, "")}
-        query_string = urlencode(sorted(filtered.items()))
-        cache_file = self.cache_dir / (hashlib.sha256(query_string.encode()).hexdigest() + ".json")
-        if cache_file.exists() and not self.refresh:
-            self.cached_responses += 1
-            return json.loads(cache_file.read_text(encoding="utf-8"))
-        # A local safety budget, not an API-imposed quota. Zero disables
-        # the local cap; pacing and server-side rejection still apply.
+    def _request_json(self, url: str) -> dict:
+        """Issue one paced, budgeted request for either API endpoint."""
+        # Local request limits are unrelated to any upstream rate limit.
         if self.max_requests and self.requests >= self.max_requests:
             raise RuntimeError(f"Request budget reached ({self.max_requests}); rerun to continue from cache")
         elapsed = time.monotonic() - self.last_call
         if self.last_call and elapsed < self.delay:
             time.sleep(self.delay - elapsed)
-        url = f"{API}?{query_string}"
         request = Request(url, headers={"Accept": "application/json", "User-Agent": "GenealogyArchiveResearch/0.1"})
         try:
             self.requests += 1
@@ -427,16 +421,41 @@ class ApiClient:
         except HTTPError as exc:
             if exc.code == 400:
                 self.http_400 += 1
-            # Read no more than 500 bytes; APIs sometimes explain validation errors.
             detail = exc.read(500).decode("utf-8", errors="replace").strip()
             detail = re.sub(r"\s+", " ", detail)[:240]
-            # Especially 403/429: never attempt to bypass access restrictions.
             raise ApiQueryError(exc.code, url, detail) from exc
         except URLError as exc:
             raise RuntimeError(f"Archive connection failed ({exc}) for {url}") from exc
-        if not isinstance(result, dict) or "results" not in result:
-            raise RuntimeError(f"Unexpected response for {url}: expected object with 'results'")
+        if not isinstance(result, dict):
+            raise RuntimeError(f"Unexpected response for {url}: expected JSON object")
         self.ok_responses += 1
+        return result
+
+    def fetch_meta(self) -> str:
+        """Get the archive's database update date; never reuse search cache."""
+        result = self._request_json(API_META)
+        value = result.get("adatbazis_frissites")
+        if not isinstance(value, str):
+            raise ValueError("API metadata does not contain adatbazis_frissites (YYYY-MM-DD)")
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError(f"Invalid archive metadata date: {value!r}") from exc
+        if parsed.isoformat() != value:
+            raise ValueError(f"Invalid archive metadata date: {value!r}")
+        return value
+
+    def fetch(self, params: dict) -> dict:
+        filtered = {k: v for k, v in params.items() if v not in (None, "")}
+        query_string = urlencode(sorted(filtered.items()))
+        cache_file = self.cache_dir / (hashlib.sha256(query_string.encode()).hexdigest() + ".json")
+        if cache_file.exists() and not self.refresh:
+            self.cached_responses += 1
+            return json.loads(cache_file.read_text(encoding="utf-8"))
+        url = f"{API}?{query_string}"
+        result = self._request_json(url)
+        if "results" not in result:
+            raise RuntimeError(f"Unexpected response for {url}: expected object with 'results'")
         cache_file.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         return result
 
