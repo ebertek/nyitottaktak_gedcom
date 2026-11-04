@@ -20,7 +20,7 @@ import sys
 import time
 import unicodedata
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import date, datetime
 from difflib import SequenceMatcher
 from pathlib import Path
 from urllib.error import HTTPError, URLError
@@ -28,6 +28,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 API = "https://nyitottaktak.hu/api/search"
+API_META = "https://nyitottaktak.hu/api/meta"
 DEFAULT_FIRST_YEAR = 1850
 DEFAULT_LAST_YEAR = 1975
 # These are explicit frontend validation bounds in nyitottaktak.hu's search.js.
@@ -403,21 +404,14 @@ class ApiClient:
         self.http_400 = 0
         self.cached_responses = 0
 
-    def fetch(self, params: dict) -> dict:
-        filtered = {k: v for k, v in params.items() if v not in (None, "")}
-        query_string = urlencode(sorted(filtered.items()))
-        cache_file = self.cache_dir / (hashlib.sha256(query_string.encode()).hexdigest() + ".json")
-        if cache_file.exists() and not self.refresh:
-            self.cached_responses += 1
-            return json.loads(cache_file.read_text(encoding="utf-8"))
-        # A local safety budget, not an API-imposed quota. Zero disables
-        # the local cap; pacing and server-side rejection still apply.
+    def _request_json(self, url: str) -> dict:
+        """Issue one paced, budgeted request for either API endpoint."""
+        # Local request limits are unrelated to any upstream rate limit.
         if self.max_requests and self.requests >= self.max_requests:
             raise RuntimeError(f"Request budget reached ({self.max_requests}); rerun to continue from cache")
         elapsed = time.monotonic() - self.last_call
         if self.last_call and elapsed < self.delay:
             time.sleep(self.delay - elapsed)
-        url = f"{API}?{query_string}"
         request = Request(url, headers={"Accept": "application/json", "User-Agent": "GenealogyArchiveResearch/0.1"})
         try:
             self.requests += 1
@@ -427,16 +421,41 @@ class ApiClient:
         except HTTPError as exc:
             if exc.code == 400:
                 self.http_400 += 1
-            # Read no more than 500 bytes; APIs sometimes explain validation errors.
             detail = exc.read(500).decode("utf-8", errors="replace").strip()
             detail = re.sub(r"\s+", " ", detail)[:240]
-            # Especially 403/429: never attempt to bypass access restrictions.
             raise ApiQueryError(exc.code, url, detail) from exc
         except URLError as exc:
             raise RuntimeError(f"Archive connection failed ({exc}) for {url}") from exc
-        if not isinstance(result, dict) or "results" not in result:
-            raise RuntimeError(f"Unexpected response for {url}: expected object with 'results'")
+        if not isinstance(result, dict):
+            raise RuntimeError(f"Unexpected response for {url}: expected JSON object")
         self.ok_responses += 1
+        return result
+
+    def fetch_meta(self) -> str:
+        """Get the archive's database update date; never reuse search cache."""
+        result = self._request_json(API_META)
+        value = result.get("adatbazis_frissites")
+        if not isinstance(value, str):
+            raise ValueError("API metadata does not contain adatbazis_frissites (YYYY-MM-DD)")
+        try:
+            parsed = date.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError(f"Invalid archive metadata date: {value!r}") from exc
+        if parsed.isoformat() != value:
+            raise ValueError(f"Invalid archive metadata date: {value!r}")
+        return value
+
+    def fetch(self, params: dict) -> dict:
+        filtered = {k: v for k, v in params.items() if v not in (None, "")}
+        query_string = urlencode(sorted(filtered.items()))
+        cache_file = self.cache_dir / (hashlib.sha256(query_string.encode()).hexdigest() + ".json")
+        if cache_file.exists() and not self.refresh:
+            self.cached_responses += 1
+            return json.loads(cache_file.read_text(encoding="utf-8"))
+        url = f"{API}?{query_string}"
+        result = self._request_json(url)
+        if "results" not in result:
+            raise RuntimeError(f"Unexpected response for {url}: expected object with 'results'")
         cache_file.write_text(json.dumps(result, ensure_ascii=False, indent=2), encoding="utf-8")
         return result
 
@@ -597,6 +616,81 @@ def atomic_json(path: Path, payload: dict) -> None:
     temporary.replace(path)
 
 
+def check_archive_update(client: ApiClient, cache_dir: Path, required: bool = False) -> str | None:
+    """Check fresh /api/meta and remember the last observed database date.
+
+    A metadata timestamp records a changed *dataset*, not which record changed.
+    Unlike search results, this call must never come from the URL response cache.
+    """
+    try:
+        updated = client.fetch_meta()
+    except ApiQueryError as exc:
+        if exc.status in (403, 429):
+            raise ValueError(f"Archive rejected metadata request (HTTP {exc.status}); stopping") from exc
+        if required:
+            raise ValueError(f"Could not check archive database date: {exc}") from exc
+        print(f"WARNING: Could not check archive database date: {exc}", file=sys.stderr)
+        return None
+    except (RuntimeError, ValueError) as exc:
+        if required:
+            raise ValueError(f"Could not check archive database date: {exc}") from exc
+        print(f"WARNING: Could not check archive database date: {exc}", file=sys.stderr)
+        return None
+
+    path = cache_dir / "database-meta.json"
+    previous = None
+    if path.exists():
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8")).get("last_seen")
+        except (ValueError, OSError, AttributeError) as exc:
+            print(f"WARNING: Could not read previous archive metadata: {exc}", file=sys.stderr)
+    if previous and previous < updated:
+        print(f"ARCHIVE DATABASE UPDATED: {previous} -> {updated}")
+        print("  Previously completed searches may be stale; use --refresh-stale to recheck them.")
+    elif previous and previous > updated:
+        print(f"ARCHIVE DATABASE DATE MOVED BACKWARD: {previous} -> {updated}; investigate before interpreting changes.")
+    elif previous == updated:
+        print(f"Archive database: {updated} (unchanged since last check)")
+    else:
+        print(f"Archive database: {updated} (first local observation)")
+    atomic_json(path, {
+        "last_seen": updated,
+        "checked_at": datetime.now().isoformat(timespec="seconds"),
+    })
+    return updated
+
+
+def checkpoint_freshness(completed: dict, eligible_ids: set[str], updated: str | None) -> tuple[int, int, int]:
+    """Count fresh, older and unknown searches for the current eligible scope."""
+    fresh = older = unknown = 0
+    for xref, entry in completed.items():
+        if xref not in eligible_ids:
+            continue
+        checked = entry.get("source_updated")
+        if not updated or not checked:
+            unknown += 1
+        elif checked == updated:
+            fresh += 1
+        else:
+            older += 1
+    return fresh, older, unknown
+
+
+def snapshot_before_refresh(output: Path) -> Path | None:
+    """Preserve the previous CSV before any refresh invalidates completed rows."""
+    if not output.exists():
+        return None
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    base = output.with_name(f"{output.stem}.pre-refresh-{stamp}{output.suffix}")
+    backup = base
+    counter = 1
+    while backup.exists():
+        backup = output.with_name(f"{output.stem}.pre-refresh-{stamp}-{counter}{output.suffix}")
+        counter += 1
+    shutil.copy2(output, backup)
+    return backup
+
+
 def write_report(output: Path, columns: list[str], completed: dict) -> None:
     """Write a complete cumulative CSV from successfully checkpointed people."""
     rows = [row for entry in completed.values() for row in entry["rows"]]
@@ -666,6 +760,7 @@ def run(args: argparse.Namespace) -> None:
         return
 
     client = ApiClient(args.cache_dir, args.delay, args.max_requests, args.refresh)
+    archive_updated = check_archive_update(client, args.cache_dir, required=args.refresh_stale)
     checkpoint_path = args.checkpoint or args.output.with_suffix(".checkpoint.json")
     gedcom_digest = hashlib.sha256(args.gedcom.read_bytes()).hexdigest()
     config = checkpoint_config(args)
@@ -683,6 +778,13 @@ def run(args: argparse.Namespace) -> None:
         restored = sum(len(entry["rows"]) for entry in completed.values())
         print(f"Resuming: {len(completed)} completed individuals and "
               f"{restored} candidates retained from {checkpoint_path}")
+        fresh, older, unknown = checkpoint_freshness(
+            completed, {person.xref for person in eligible}, archive_updated)
+        print(f"Archive freshness for selected people: {fresh} current, "
+              f"{older} older snapshot, {unknown} unknown.")
+        if older or unknown:
+            print("  Checkpoint progress is preserved. "
+                  "Use --refresh-stale to re-query older/unknown entries, if desired.")
     columns = ["gedcom_id", "gedcom_name", "gedcom_birth", "gedcom_birth_place", "gedcom_mother",
                "archive_guid", "archive_name", "archive_birth", "archive_birth_place", "archive_mother",
                "archive_cover_name", "archive_record_type", "match_score", "review_priority", "evidence",
@@ -693,6 +795,7 @@ def run(args: argparse.Namespace) -> None:
     incomplete_searches: list[str] = []
     stop_now = False
     skipped_from_checkpoint = 0
+    backup_made = False
 
     def persist() -> None:
         atomic_json(checkpoint_path, {
@@ -704,14 +807,28 @@ def run(args: argparse.Namespace) -> None:
         write_report(args.output, columns, completed)
 
     for index, person in enumerate(eligible, 1):
-        if person.xref in completed and not args.refresh:
+        prior = completed.get(person.xref)
+        is_stale = bool(
+            prior is not None and archive_updated and
+            prior.get("source_updated") != archive_updated
+        )
+        requery = args.refresh or (args.refresh_stale and is_stale)
+        if prior is not None and not requery:
             skipped_from_checkpoint += 1
             continue
-        if args.refresh and person.xref in completed:
-            # Do not leave a previously completed entry looking current if
-            # the fresh query is interrupted before this person finishes.
+        if prior is not None and requery:
+            if not backup_made:
+                backed_up = snapshot_before_refresh(args.output)
+                if backed_up:
+                    print(f"Pre-refresh candidate report saved as: {backed_up}")
+                backup_made = True
+            # Remove the old completion *before* starting the refresh so an
+            # interrupted request cannot silently retain stale identity leads.
             completed.pop(person.xref)
             persist()
+        # On an explicit refresh, bypass all cached queries for this person.
+        client.refresh = bool(args.refresh or (args.refresh_stale and is_stale))
+        before_cached = client.cached_responses
         names = candidate_names(person)
         mothers = mother_names(person, people, families)
         year = birth_year(person.born)
@@ -829,6 +946,11 @@ def run(args: argparse.Namespace) -> None:
                 "raw_count": len(archive_hits),
                 "rows": person_rows,
                 "warnings": person_warnings,
+                # A cached query could predate the site's latest update. Never
+                # label it current unless every HTTP response was fetched live.
+                "source_updated": (
+                    archive_updated if client.cached_responses == before_cached else None
+                ),
             }
             persist()
         else:
@@ -858,6 +980,10 @@ def run(args: argparse.Namespace) -> None:
           f"{candidate_count} candidate rows -> {args.output}")
     print(f"Checkpoint: {len(completed)} saved people; {skipped_from_checkpoint} skipped this run; "
           f"{sum(p.xref not in completed for p in eligible)} remaining in selected scope.")
+    fresh, older, unknown = checkpoint_freshness(
+        completed, {person.xref for person in eligible}, archive_updated)
+    print(f"Archive freshness: {fresh} current, {older} older snapshot, {unknown} unknown "
+          "among completed people in this scope.")
     if stop_now or errors or incomplete_searches or saved_warnings:
         print("NOTE: Some searches failed or were not completed; absence of matches is not conclusive.")
     print("IMPORTANT: A match is an identity lead, not evidence that someone was an agent.")
@@ -867,7 +993,7 @@ def run(args: argparse.Namespace) -> None:
 
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("gedcom", type=Path, help="Local .ged/.gedcom file")
+    parser.add_argument("gedcom", nargs="?", type=Path, help="Local .ged/.gedcom file")
     parser.add_argument("--execute", action="store_true", help="Actually send API requests (otherwise preview only)")
     parser.add_argument("--person-id", action="append", default=[], metavar="ID",
                         help="Only search this GEDCOM individual (repeatable; e.g. I123 or @I123@)")
@@ -897,15 +1023,27 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("nyitottaktak_matches.csv"))
     parser.add_argument("--cache-dir", type=Path, default=Path(".nyitottaktak_cache"))
     parser.add_argument("--refresh", action="store_true", help="Refresh cached API responses")
+    parser.add_argument("--check-updates", action="store_true",
+                        help="Check /api/meta for changes and exit (GEDCOM file not required)")
+    parser.add_argument("--refresh-stale", action="store_true",
+                        help="Recheck completed people searched before the latest database update; "
+                             "unknown-date checkpoints are also rechecked")
     args = parser.parse_args()
-    if not args.gedcom.is_file():
-        parser.error(f"GEDCOM file not found: {args.gedcom}")
     if args.all:
         args.max_people = 0
         args.max_requests = 0
     if (args.delay < 0.5 or args.max_people < 0 or args.max_requests < 0 or
             args.min_score < 0 or args.year_tolerance < 0):
         parser.error("Use --delay >= 0.5, nonnegative budgets (0 = unlimited), score and tolerance")
+    if args.check_updates:
+        try:
+            client = ApiClient(args.cache_dir, args.delay, args.max_requests, False)
+            check_archive_update(client, args.cache_dir, required=True)
+        except ValueError as exc:
+            parser.error(str(exc))
+        return
+    if args.gedcom is None or not args.gedcom.is_file():
+        parser.error(f"GEDCOM file not found: {args.gedcom}")
     try:
         run(args)
     except ValueError as exc:

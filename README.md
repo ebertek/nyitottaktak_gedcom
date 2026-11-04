@@ -39,6 +39,28 @@ python nyitottaktak_gedcom.py 'Family Tree.ged' --execute \
 
 The default order prioritizes birth years close to 1930; it is **not** the same as GEDCOM file order. Use `--order gedcom` to preserve the file order, or `--person-id` to select particular relatives directly. By default, people without birth years are excluded; `--include-undated` opts them in. Individuals without usable surnames are always excluded.
 
+### Tracking database updates
+
+The website's `GET /api/meta` returns an `adatbazis_frissites` database update date (for example, `2026-11-04`). The tool checks this endpoint **live at the beginning of every executed search**, then compares the date with the last observation saved locally under `.nyitottaktak_cache/database-meta.json`.
+
+```bash
+# Metadata-only check, no GEDCOM file or archival search required
+python nyitottaktak_gedcom.py --check-updates
+
+# Recheck previously completed people only if their database date is older
+# or their original checkpoint has no verifiable database date.
+python nyitottaktak_gedcom.py 'Family Tree.ged' \
+  --execute --all --exhaustive --refresh-stale --delay 2
+```
+
+The checkpoint stores a `source_updated` date **per completed person**, preserving compatibility with older checkpoints. The summary distinguishes `current`, `older snapshot` and `unknown` entries. A person is recorded as current only if all their search responses came from the live server while the database reported that date. Cached queries from earlier runs and older checkpoint files have **unknown** provenance rather than falsely claiming freshness.
+
+Database changes do **not** automatically invalidate a completed search: ordinary runs preserve existing results and display a warning. `--refresh-stale` opt-in rechecks older/unknown completed entries and bypasses their cached API replies. An ordinary `--refresh` continues to force a complete selected requery. Before replacing checkpointed results, the script copies the previous CSV to a dated `.pre-refresh-...` backup. Interrupted refreshes remain unfinished and can be safely resumed.
+
+An unsuccessful metadata check **does not cause an ordinary scan to discard progress**, but archive freshness cannot then be established; `--refresh-stale` requires valid metadata and refuses to proceed without it. HTTP 403/429 responses from the metadata endpoint stop the run. The metadata check counts as one HTTP request against any local `--max-requests` budget.
+
+**Important:** A changed database date does not say which person or record changed. Even when marked current, a search is limited to the public dataset and the filters used, not a comprehensive archival investigation. Always retain the underlying source documents for verification.
+
 ### Resuming long searches
 
 Each successfully searched person is checkpointed immediately to `nyitottaktak_matches.checkpoint.json` (derived from `--output`). The CSV is also rewritten **atomically and cumulatively** after each completed individual. When you run **the same search again**, already completed individuals are skipped and their candidate rows are retained; only unfinished individuals generate new API requests. Cached HTTP replies additionally avoid querying the same URL twice.
@@ -94,7 +116,7 @@ The FAQ explicitly warns that records were destroyed, individuals outside the fo
 
 The output CSV includes `archive_source_summary` and `archive_interpretation_limits` based **only** on `archive_record_type`. These are explanatory source notes, not an individualized classification. They are derived when the CSV is exported, so existing checkpoints gain them without requesting the same archive records again.
 
-**Database updates:** The archive says it is updated continuously, with B-dossier additions scheduled through February 25, 2027. Cached results and completed checkpoints do not automatically expire when the remote database changes. To recheck existing searches after a known archive update, use `--refresh` (which bypasses the request cache and reprocesses selected people) and preserve earlier CSV exports if you want to compare revisions.
+**Database updates:** The archive says it is updated continuously, with B-dossier additions scheduled through February 25, 2027. Use `--check-updates` to compare the published database date against the previous local observation. The normal scan also checks automatically; `--refresh-stale` selectively rechecks old or unverified completions. `--refresh` forces re-querying every selected individual.
 
 For additional historical verification, the archive directs researchers to [ÁBTL research](https://www.abtl.hu/kutatas/) and its [records-access portal](https://lar.abtl.hu/ords/r/abtl/sb/home).
 

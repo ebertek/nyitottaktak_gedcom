@@ -12,6 +12,8 @@ from unittest.mock import patch
 
 import nyitottaktak_gedcom as finder
 
+ORIGINAL_FETCH_META = finder.ApiClient.fetch_meta
+
 SAMPLE_GEDCOM = """0 HEAD
 1 CHAR UTF-8
 0 @I1@ INDI
@@ -62,6 +64,10 @@ class GedcomTests(unittest.TestCase):
         self.path = Path(self.tmp.name) / "example.ged"
         self.path.write_text(SAMPLE_GEDCOM, encoding="utf-8")
         self.people, self.families = finder.read_gedcom(self.path)
+        # Existing offline tests must never accidentally call the live /api/meta.
+        meta_patch = patch.object(finder.ApiClient, "fetch_meta", return_value="2026-11-04")
+        meta_patch.start()
+        self.addCleanup(meta_patch.stop)
 
     def test_full_gedcom_names_and_mothers(self):
         self.assertEqual(finder.candidate_names(self.people["I1"]), ["Fenyvesi Ágnes"])
@@ -133,7 +139,7 @@ class GedcomTests(unittest.TestCase):
             execute=True, verbose=False, exhaustive=False,
             api_year_ceiling=1990, year_tolerance=2, min_score=35,
             output=Path(self.tmp.name) / "nyitottaktak_matches.csv",
-            checkpoint=None, no_resume=False, refresh=False,
+            checkpoint=None, no_resume=False, refresh=False, refresh_stale=False,
             cache_dir=Path(self.tmp.name) / "api_cache", delay=0.5, max_requests=3,
         )
 
@@ -339,6 +345,108 @@ class GedcomTests(unittest.TestCase):
             self.assertIn("fictitious recruitment",
                           rows[0]["archive_interpretation_limits"])
             self.assertEqual(rows[0]["archive_guid"], "fictional-record-1")
+
+    def test_meta_endpoint_parsing_validates_iso_date(self):
+        client = finder.ApiClient(Path(self.tmp.name) / "meta", delay=0.5,
+                                  max_requests=10, refresh=False)
+        with patch.object(finder.ApiClient, "_request_json",
+                          return_value={"adatbazis_frissites": "2026-11-04"}) as request:
+            self.assertEqual(ORIGINAL_FETCH_META(client), "2026-11-04")
+        request.assert_called_once_with(finder.API_META)
+        for payload in (
+            {"adatbazis_frissites": "unknown"},
+            {"adatbazis_frissites": "2026-99-99"},
+            {"adatbazis_frissites": 20261104},
+            {},
+        ):
+            with self.subTest(payload=payload), \
+                 patch.object(finder.ApiClient, "_request_json", return_value=payload):
+                with self.assertRaises(ValueError):
+                    ORIGINAL_FETCH_META(client)
+
+    def test_meta_tracking_detects_change_without_scanning_gedcom(self):
+        client = finder.ApiClient(Path(self.tmp.name) / "track", 0.5, 10, False)
+        with patch.object(finder.ApiClient, "fetch_meta",
+                          side_effect=["2026-11-04", "2026-11-04", "2026-11-06"]):
+            with contextlib.redirect_stdout(io.StringIO()) as first:
+                self.assertEqual(finder.check_archive_update(client, client.cache_dir),
+                                 "2026-11-04")
+            with contextlib.redirect_stdout(io.StringIO()) as second:
+                finder.check_archive_update(client, client.cache_dir)
+            with contextlib.redirect_stdout(io.StringIO()) as third:
+                finder.check_archive_update(client, client.cache_dir)
+        self.assertIn("first local observation", first.getvalue())
+        self.assertIn("unchanged", second.getvalue())
+        self.assertIn("UPDATED: 2026-11-04 -> 2026-11-06", third.getvalue())
+        state = json.loads((client.cache_dir / "database-meta.json").read_text())
+        self.assertEqual(state["last_seen"], "2026-11-06")
+
+    def test_check_updates_cli_does_not_require_gedcom(self):
+        directory = Path(self.tmp.name) / "metacli"
+        with patch("sys.argv", ["nyitottaktak_gedcom.py", "--check-updates",
+                                "--cache-dir", str(directory)]):
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                finder.main()
+        self.assertIn("2026-11-04", output.getvalue())
+        self.assertTrue((directory / "database-meta.json").is_file())
+
+    def test_existing_checkpoint_can_recheck_only_stale_people(self):
+        args = self.scan_args(["I1"])
+        record = {
+            "guid": "fictional-record-1", "nev": "Fenyvesi Ágnes",
+            "szul_ido": "1966.10.17", "szul_hely": "Pécs",
+            "anyja_neve": "László Teréz",
+        }
+        response = ([record], False, "https://example.invalid/search", False)
+        with patch.object(finder.ApiClient, "search_all", return_value=response):
+            with contextlib.redirect_stdout(io.StringIO()):
+                finder.run(args)
+        path = args.output.with_suffix(".checkpoint.json")
+        self.assertEqual(json.loads(path.read_text())["completed"]["I1"]["source_updated"],
+                         "2026-11-04")
+        with patch.object(finder.ApiClient, "fetch_meta", return_value="2026-11-06"), \
+             patch.object(finder.ApiClient, "search_all",
+                          side_effect=AssertionError("should remain checkpointed")):
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                finder.run(args)
+        self.assertIn("1 older snapshot", output.getvalue())
+        args.refresh_stale = True
+        refreshed_with_live_http = []
+        def newer_search(client, _filters):
+            refreshed_with_live_http.append(client.refresh)
+            return response
+        with patch.object(finder.ApiClient, "fetch_meta", return_value="2026-11-06"), \
+             patch.object(finder.ApiClient, "search_all", newer_search):
+            with contextlib.redirect_stdout(io.StringIO()):
+                finder.run(args)
+        self.assertEqual(refreshed_with_live_http, [True])
+        state = json.loads(path.read_text())
+        self.assertEqual(state["completed"]["I1"]["source_updated"], "2026-11-06")
+        self.assertEqual(len(list(Path(self.tmp.name).glob("nyitottaktak_matches.pre-refresh-*.csv"))), 1)
+
+    def test_unknown_legacy_checkpoint_is_not_falsely_marked_current(self):
+        args = self.scan_args()
+        with patch.object(finder.ApiClient, "search_all",
+                          return_value=([], False, "https://example.invalid/search", False)):
+            with contextlib.redirect_stdout(io.StringIO()):
+                finder.run(args)
+        path = args.output.with_suffix(".checkpoint.json")
+        state = json.loads(path.read_text())
+        del state["completed"]["I1"]["source_updated"]
+        path.write_text(json.dumps(state), encoding="utf-8")
+        with patch.object(finder.ApiClient, "search_all",
+                          side_effect=AssertionError("unexpected requery")):
+            with contextlib.redirect_stdout(io.StringIO()) as output:
+                finder.run(args)
+        self.assertIn("1 unknown", output.getvalue())
+
+    def test_failed_required_metadata_cannot_mutate_checkpoint(self):
+        args = self.scan_args()
+        args.refresh_stale = True
+        with patch.object(finder.ApiClient, "fetch_meta", side_effect=ValueError("malformed date")):
+            with self.assertRaisesRegex(ValueError, "Could not check archive database date"):
+                finder.run(args)
+        self.assertFalse(args.output.with_suffix(".checkpoint.json").exists())
 
     def test_api_response_is_cached_without_live_network(self):
         with tempfile.TemporaryDirectory() as tmp:
