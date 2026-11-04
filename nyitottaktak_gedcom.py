@@ -152,13 +152,30 @@ def norm(value: str) -> str:
     return " ".join(value.split())
 
 
+# GEDCOM 5.x/7 stores surnames between slashes: "Mária /Nagy/".
+# A blank pair ("Mária //") means the surname is missing. Do not send
+# these first-name-only entries to the API: the resulting searches can be
+# extremely broad and may produce misleading candidate matches.
+MISSING_SURNAMES = {"unknown", "ismeretlen", "nn", "n n", "none"}
+
+
+def has_gedcom_surname(raw: str) -> bool:
+    """Only accept an explicit, non-placeholder GEDCOM /Surname/ field."""
+    surnames = re.findall(r"/([^/]*)/", raw)
+    return any(norm(surname) not in MISSING_SURNAMES and bool(norm(surname))
+               for surname in surnames)
+
+
 def candidate_names(person: Person) -> list[str]:
     # GEDCOM's birth NAME is already the maiden name for women: use it directly.
     # Prefer birth/primary names; search explicitly recorded married/alias names
     # as alternatives, without guessing a surname from the spouse.
+    # Filter at the source, so unnamed people are skipped in preview AND execute.
     sorted_names = sorted(person.names, key=lambda n: (n[1] not in ("birth", ""), n[1] == "married"))
     names: list[str] = []
     for raw, _type in sorted_names:
+        if not has_gedcom_surname(raw):
+            continue
         candidate = human_name(raw)
         if candidate and candidate.casefold() not in {n.casefold() for n in names}:
             names.append(candidate)
@@ -482,9 +499,11 @@ def run(args: argparse.Namespace) -> None:
     people, families = read_gedcom(args.gedcom)
     eligible: list[Person] = []
     missing_years = 0
+    missing_surnames = 0
     for person in people.values():
         yr = birth_year(person.born)
         if not candidate_names(person):
+            missing_surnames += 1
             continue
         if yr is None and not args.include_undated:
             missing_years += 1
@@ -492,7 +511,9 @@ def run(args: argparse.Namespace) -> None:
         if yr is not None and not (args.since <= yr <= args.until):
             continue
         eligible.append(person)
-    print(f"Loaded {len(people)} individuals; {len(eligible)} eligible; {missing_years} without birth year skipped.")
+    print(f"Loaded {len(people)} individuals; {len(eligible)} eligible; "
+          f"{missing_surnames} without a surname skipped; "
+          f"{missing_years} without birth year skipped.")
     if args.order == "historical":
         eligible.sort(key=historical_order)
     elif args.order == "oldest":
