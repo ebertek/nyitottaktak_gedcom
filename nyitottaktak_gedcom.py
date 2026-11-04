@@ -616,6 +616,81 @@ def atomic_json(path: Path, payload: dict) -> None:
     temporary.replace(path)
 
 
+def check_archive_update(client: ApiClient, cache_dir: Path, required: bool = False) -> str | None:
+    """Check fresh /api/meta and remember the last observed database date.
+
+    A metadata timestamp records a changed *dataset*, not which record changed.
+    Unlike search results, this call must never come from the URL response cache.
+    """
+    try:
+        updated = client.fetch_meta()
+    except ApiQueryError as exc:
+        if exc.status in (403, 429):
+            raise ValueError(f"Archive rejected metadata request (HTTP {exc.status}); stopping") from exc
+        if required:
+            raise ValueError(f"Could not check archive database date: {exc}") from exc
+        print(f"WARNING: Could not check archive database date: {exc}", file=sys.stderr)
+        return None
+    except (RuntimeError, ValueError) as exc:
+        if required:
+            raise ValueError(f"Could not check archive database date: {exc}") from exc
+        print(f"WARNING: Could not check archive database date: {exc}", file=sys.stderr)
+        return None
+
+    path = cache_dir / "database-meta.json"
+    previous = None
+    if path.exists():
+        try:
+            previous = json.loads(path.read_text(encoding="utf-8")).get("last_seen")
+        except (ValueError, OSError, AttributeError) as exc:
+            print(f"WARNING: Could not read previous archive metadata: {exc}", file=sys.stderr)
+    if previous and previous < updated:
+        print(f"ARCHIVE DATABASE UPDATED: {previous} -> {updated}")
+        print("  Previously completed searches may be stale; use --refresh-stale to recheck them.")
+    elif previous and previous > updated:
+        print(f"ARCHIVE DATABASE DATE MOVED BACKWARD: {previous} -> {updated}; investigate before interpreting changes.")
+    elif previous == updated:
+        print(f"Archive database: {updated} (unchanged since last check)")
+    else:
+        print(f"Archive database: {updated} (first local observation)")
+    atomic_json(path, {
+        "last_seen": updated,
+        "checked_at": datetime.now().isoformat(timespec="seconds"),
+    })
+    return updated
+
+
+def checkpoint_freshness(completed: dict, eligible_ids: set[str], updated: str | None) -> tuple[int, int, int]:
+    """Count fresh, older and unknown searches for the current eligible scope."""
+    fresh = older = unknown = 0
+    for xref, entry in completed.items():
+        if xref not in eligible_ids:
+            continue
+        checked = entry.get("source_updated")
+        if not updated or not checked:
+            unknown += 1
+        elif checked == updated:
+            fresh += 1
+        else:
+            older += 1
+    return fresh, older, unknown
+
+
+def snapshot_before_refresh(output: Path) -> Path | None:
+    """Preserve the previous CSV before any refresh invalidates completed rows."""
+    if not output.exists():
+        return None
+    stamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    base = output.with_name(f"{output.stem}.pre-refresh-{stamp}{output.suffix}")
+    backup = base
+    counter = 1
+    while backup.exists():
+        backup = output.with_name(f"{output.stem}.pre-refresh-{stamp}-{counter}{output.suffix}")
+        counter += 1
+    shutil.copy2(output, backup)
+    return backup
+
+
 def write_report(output: Path, columns: list[str], completed: dict) -> None:
     """Write a complete cumulative CSV from successfully checkpointed people."""
     rows = [row for entry in completed.values() for row in entry["rows"]]
