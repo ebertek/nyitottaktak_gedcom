@@ -201,6 +201,27 @@ class GedcomTests(unittest.TestCase):
         state = json.loads(args.output.with_suffix(".checkpoint.json").read_text(encoding="utf-8"))
         self.assertEqual(set(state["completed"]), {"I1", "I4"})
 
+    def test_interrupted_refresh_does_not_leave_stale_completed_entry(self):
+        args = self.scan_args()
+        record = {
+            "guid": "fictional-record-1", "nev": "Fenyvesi Ágnes",
+            "szul_ido": "1966.10.17", "szul_hely": "Pécs",
+            "anyja_neve": "László Teréz",
+        }
+        with patch.object(finder.ApiClient, "search_all",
+                          return_value=([record], False, "https://example.invalid/search", False)):
+            with contextlib.redirect_stdout(io.StringIO()):
+                finder.run(args)
+        args.refresh = True
+        with patch.object(finder.ApiClient, "search_all",
+                          side_effect=RuntimeError("Request budget reached (3)")):
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                finder.run(args)
+        state = json.loads(args.output.with_suffix(".checkpoint.json").read_text(encoding="utf-8"))
+        self.assertEqual(state["completed"], {})
+        with args.output.open(encoding="utf-8-sig", newline="") as handle:
+            self.assertEqual(len(list(csv.DictReader(handle))), 0)
+
     def test_checkpoint_rejects_changed_configuration(self):
         args = self.scan_args()
         with patch.object(finder.ApiClient, "search_all",
