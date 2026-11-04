@@ -140,6 +140,7 @@ class GedcomTests(unittest.TestCase):
             api_year_ceiling=1990, year_tolerance=2, min_score=35,
             output=Path(self.tmp.name) / "nyitottaktak_matches.csv",
             checkpoint=None, no_resume=False, refresh=False, refresh_stale=False,
+            coverage_only=False, coverage_output=None,
             cache_dir=Path(self.tmp.name) / "api_cache", delay=0.5, max_requests=3,
         )
 
@@ -447,6 +448,83 @@ class GedcomTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Could not check archive database date"):
                 finder.run(args)
         self.assertFalse(args.output.with_suffix(".checkpoint.json").exists())
+
+    def test_coverage_only_is_offline_and_shows_unsearched_people(self):
+        args = self.scan_args(["I1", "I4"])
+        args.coverage_only = True
+        with patch.object(finder.ApiClient, "_request_json",
+                          side_effect=AssertionError("unexpected network")), \
+             contextlib.redirect_stdout(io.StringIO()):
+            finder.run(args)
+        report = args.output.with_suffix(".coverage.csv")
+        with report.open(encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual({row["gedcom_id"]: row["search_status"] for row in rows},
+                         {"I1": "not_completed", "I4": "not_completed"})
+        self.assertFalse(args.output.with_suffix(".checkpoint.json").exists())
+
+    def test_coverage_distinguishes_limited_and_completed(self):
+        args = self.scan_args(["I1", "I4"])
+        args.coverage_only = True
+        person = {
+            "name": "Fenyvesi Ágnes", "raw_count": 3, "rows": [],
+            "warnings": ["I1: too_many results"], "source_updated": "2026-11-04",
+        }
+        state = {
+            "version": finder.CHECKPOINT_VERSION,
+            "gedcom_sha256": finder.hashlib.sha256(self.path.read_bytes()).hexdigest(),
+            "config": finder.checkpoint_config(args),
+            "completed": {"I1": person, "I4": {
+                "name": "Pusztai Lili", "raw_count": 0, "rows": [],
+                "warnings": [], "source_updated": "2026-11-04",
+            }},
+        }
+        finder.atomic_json(args.output.with_suffix(".checkpoint.json"), state)
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            finder.run(args)
+        self.assertIn("1 completed, 1 limited, 0 not completed", output.getvalue())
+        with args.output.with_suffix(".coverage.csv").open(
+                encoding="utf-8-sig", newline="") as handle:
+            rows = {row["gedcom_id"]: row for row in csv.DictReader(handle)}
+        self.assertEqual(rows["I1"]["search_status"], "limited")
+        self.assertEqual(rows["I1"]["raw_records"], "3")
+        self.assertIn("too_many", rows["I1"]["search_warnings"])
+        self.assertEqual(rows["I4"]["search_status"], "completed")
+
+    def test_recoverable_400_is_visible_as_limited_coverage(self):
+        args = self.scan_args()
+        calls = [0]
+        def fake_search(_client, _filters):
+            calls[0] += 1
+            if calls[0] == 1:
+                raise finder.ApiQueryError(
+                    400, "https://example.invalid/invalid", "invalid birthplace")
+            return [], False, "https://example.invalid/search", False
+        with patch.object(finder.ApiClient, "search_all", fake_search), \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()):
+            finder.run(args)
+        report = args.output.with_suffix(".coverage.csv")
+        with report.open(encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["search_status"], "limited")
+        self.assertIn("HTTP 400", rows[0]["search_warnings"])
+        self.assertGreater(calls[0], 1)
+        self.assertEqual(rows[0]["candidate_rows"], "0")
+
+    def test_too_many_is_visible_as_limited_coverage(self):
+        args = self.scan_args()
+        with patch.object(finder.ApiClient, "search_all",
+                          return_value=([], True, "https://example.invalid/search", False)), \
+             contextlib.redirect_stdout(io.StringIO()), \
+             contextlib.redirect_stderr(io.StringIO()):
+            finder.run(args)
+        with args.output.with_suffix(".coverage.csv").open(
+                encoding="utf-8-sig", newline="") as handle:
+            row = next(csv.DictReader(handle))
+        self.assertEqual(row["search_status"], "limited")
+        self.assertIn("too_many", row["search_warnings"])
 
     def test_api_response_is_cached_without_live_network(self):
         with tempfile.TemporaryDirectory() as tmp:
