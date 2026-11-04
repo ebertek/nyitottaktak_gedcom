@@ -15,6 +15,7 @@ import csv
 import hashlib
 import json
 import re
+import shutil
 import sys
 import time
 import unicodedata
@@ -508,6 +509,58 @@ def historical_order(person: Person) -> tuple:
             person.xref)
 
 
+CHECKPOINT_VERSION = 1
+
+
+def checkpoint_config(args: argparse.Namespace) -> dict:
+    """Only search/scoring options belong here, not per-run budgets or scope."""
+    return {
+        "exhaustive": args.exhaustive,
+        "year_tolerance": args.year_tolerance,
+        "api_year_ceiling": args.api_year_ceiling,
+        "min_score": args.min_score,
+    }
+
+
+def load_checkpoint(path: Path, gedcom_digest: str, config: dict) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        state = json.loads(path.read_text(encoding="utf-8"))
+    except (ValueError, OSError) as exc:
+        raise ValueError(f"Unreadable checkpoint {path}: {exc}") from exc
+    if (state.get("version") != CHECKPOINT_VERSION or
+            state.get("gedcom_sha256") != gedcom_digest or state.get("config") != config):
+        raise ValueError(
+            f"Checkpoint {path} belongs to a different GEDCOM or search configuration. "
+            "Use --checkpoint with a new filename, or --no-resume to start fresh."
+        )
+    entries = state.get("completed")
+    if not isinstance(entries, dict):
+        raise ValueError(f"Invalid checkpoint format: {path}")
+    return entries
+
+
+def atomic_json(path: Path, payload: dict) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
+    temporary.replace(path)
+
+
+def write_report(output: Path, columns: list[str], completed: dict) -> None:
+    """Write a complete cumulative CSV from successfully checkpointed people."""
+    rows = [row for entry in completed.values() for row in entry["rows"]]
+    rows.sort(key=lambda row: (-int(row["match_score"]), row["gedcom_id"], row["archive_guid"]))
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_name(output.name + ".tmp")
+    with temporary.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
+    temporary.replace(output)
+
+
 def run(args: argparse.Namespace) -> None:
     people, families = read_gedcom(args.gedcom)
     eligible: list[Person] = []
@@ -554,18 +607,46 @@ def run(args: argparse.Namespace) -> None:
         return
 
     client = ApiClient(args.cache_dir, args.delay, args.max_requests, args.refresh)
+    checkpoint_path = args.checkpoint or args.output.with_suffix(".checkpoint.json")
+    gedcom_digest = hashlib.sha256(args.gedcom.read_bytes()).hexdigest()
+    config = checkpoint_config(args)
+    existing_checkpoint = checkpoint_path.exists()
+    completed = ({} if args.no_resume
+                 else load_checkpoint(checkpoint_path, gedcom_digest, config))
+    if not existing_checkpoint and args.output.exists():
+        # v4 had no checkpoint. Keep its report until the new run regenerates
+        # the same results from cached API responses.
+        backup = args.output.with_name(args.output.stem + ".pre-checkpoint" + args.output.suffix)
+        if not backup.exists():
+            shutil.copy2(args.output, backup)
+            print(f"Existing pre-checkpoint CSV preserved as: {backup}")
+    if completed:
+        restored = sum(len(entry["rows"]) for entry in completed.values())
+        print(f"Resuming: {len(completed)} completed individuals and "
+              f"{restored} candidates retained from {checkpoint_path}")
     columns = ["gedcom_id", "gedcom_name", "gedcom_birth", "gedcom_birth_place", "gedcom_mother",
                "archive_guid", "archive_name", "archive_birth", "archive_birth_place", "archive_mother",
                "archive_cover_name", "archive_record_type", "match_score", "review_priority", "evidence",
                "searched_name", "api_search_url", "archive_document_url"]
-    rows: list[dict] = []
     errors: list[str] = []
     recovered_400s: list[str] = []
     incomplete_searches: list[str] = []
-    people_with_raw_results = 0
-    raw_unique_results = 0
     stop_now = False
+    skipped_from_checkpoint = 0
+
+    def persist() -> None:
+        atomic_json(checkpoint_path, {
+            "version": CHECKPOINT_VERSION,
+            "gedcom_sha256": gedcom_digest,
+            "config": config,
+            "completed": completed,
+        })
+        write_report(args.output, columns, completed)
+
     for index, person in enumerate(eligible, 1):
+        if person.xref in completed and not args.refresh:
+            skipped_from_checkpoint += 1
+            continue
         names = candidate_names(person)
         mothers = mother_names(person, people, families)
         year = birth_year(person.born)
@@ -573,6 +654,9 @@ def run(args: argparse.Namespace) -> None:
         print(f"[{index}/{len(eligible)}] {names[0]} ({year or '?'})", flush=True)
         archive_hits: dict[str, tuple[dict, str, str]] = {}
         missing_birth_date_notice = False
+        person_failed = False
+        person_warnings: list[str] = []
+        person_rows: list[dict] = []
 
         # Search names separately (birth, married/aliases) with a filtered-first
         # approach. If that returns nothing, progressively remove strict fields.
@@ -610,11 +694,13 @@ def run(args: argparse.Namespace) -> None:
                         continue
                     errors.append(f"{person.xref}: {exc}")
                     print(f"  ERROR: {exc}", file=sys.stderr)
+                    person_failed = True
                     if exc.status in (403, 429):
                         stop_now = True
                         break
                     continue
                 except RuntimeError as exc:
+                    person_failed = True
                     errors.append(f"{person.xref}: {exc}")
                     print(f"  ERROR: {exc}", file=sys.stderr)
                     if "Request budget reached" in str(exc):
@@ -627,6 +713,7 @@ def run(args: argparse.Namespace) -> None:
                 if capped:
                     warning = f"{person.xref}: search for {name!r} returned too_many; narrow the filters"
                     incomplete_searches.append(warning)
+                    person_warnings.append(warning)
                     print(f"  WARNING: {warning}", file=sys.stderr)
                 if includes_missing_birth_dates:
                     missing_birth_date_notice = True
@@ -640,9 +727,6 @@ def run(args: argparse.Namespace) -> None:
             if stop_now:
                 break
 
-        if archive_hits:
-            people_with_raw_results += 1
-            raw_unique_results += len(archive_hits)
         accepted_for_person = 0
         for result, searched_name, url in archive_hits.values():
             quality, reasons, matched_name = score(person, result, names, mothers)
@@ -650,7 +734,7 @@ def run(args: argparse.Namespace) -> None:
                 continue
             priority = "strong candidate" if quality >= 85 else ("possible candidate" if quality >= 60 else "weak candidate")
             accepted_for_person += 1
-            rows.append({
+            person_rows.append({
                 "gedcom_id": person.xref,
                 "gedcom_name": matched_name or names[0],
                 "gedcom_birth": person.born,
@@ -674,29 +758,42 @@ def run(args: argparse.Namespace) -> None:
                 ),
             })
         print(f"  Raw records: {len(archive_hits)}; candidates after score filter: {accepted_for_person}", flush=True)
+        if not person_failed and not stop_now:
+            completed[person.xref] = {
+                "name": names[0],
+                "raw_count": len(archive_hits),
+                "rows": person_rows,
+                "warnings": person_warnings,
+            }
+            persist()
+        else:
+            print("  NOTE: Person not checkpointed because search was interrupted or failed.")
         if missing_birth_date_notice:
             print("  NOTE: Archive search includes record types without birth dates; identity checks may be weaker.")
         if stop_now:
             print("Stopping early to respect the site's limits.", file=sys.stderr)
             break
 
-    rows.sort(key=lambda r: (-int(r["match_score"]), r["gedcom_id"], r["archive_guid"]))
-    args.output.parent.mkdir(parents=True, exist_ok=True)
-    with args.output.open("w", newline="", encoding="utf-8-sig") as handle:
-        writer = csv.DictWriter(handle, fieldnames=columns)
-        writer.writeheader()
-        writer.writerows(rows)
+    # Write even if no people were searched (e.g. fully resumed).
+    persist()
+    raw_unique_results = sum(int(entry.get("raw_count", 0)) for entry in completed.values())
+    people_with_raw_results = sum(int(entry.get("raw_count", 0)) > 0 for entry in completed.values())
+    candidate_count = sum(len(entry["rows"]) for entry in completed.values())
+    saved_warnings = [w for entry in completed.values() for w in entry.get("warnings", [])]
     error_file = args.output.with_suffix(".errors.txt")
-    if errors or recovered_400s or incomplete_searches:
-        error_file.write_text("\n".join(errors + recovered_400s + incomplete_searches) + "\n", encoding="utf-8")
+    if errors or recovered_400s or incomplete_searches or saved_warnings:
+        error_file.write_text("\n".join(dict.fromkeys(
+            errors + recovered_400s + incomplete_searches + saved_warnings)) + "\n", encoding="utf-8")
         print(f"Errors and rejected filters saved to: {error_file}", file=sys.stderr)
     elif error_file.exists():
         error_file.unlink()  # Don't leave stale errors from a previous run.
     print(f"Finished: {client.requests} network requests ({client.ok_responses} successful, "
           f"{client.http_400} HTTP 400, {client.cached_responses} cache hits); "
           f"{raw_unique_results} unique raw records across {people_with_raw_results} people; "
-          f"{len(rows)} candidate rows -> {args.output}")
-    if stop_now or errors or incomplete_searches:
+          f"{candidate_count} candidate rows -> {args.output}")
+    print(f"Checkpoint: {len(completed)} saved people; {skipped_from_checkpoint} skipped this run; "
+          f"{sum(p.xref not in completed for p in eligible)} remaining in selected scope.")
+    if stop_now or errors or incomplete_searches or saved_warnings:
         print("NOTE: Some searches failed or were not completed; absence of matches is not conclusive.")
     print("IMPORTANT: A match is an identity lead, not evidence that someone was an agent.")
 
@@ -708,6 +805,10 @@ def main() -> None:
     parser.add_argument("--person-id", action="append", default=[], metavar="ID",
                         help="Only search this GEDCOM individual (repeatable; e.g. I123 or @I123@)")
     parser.add_argument("--verbose", action="store_true", help="Print API query filters and result counts")
+    parser.add_argument("--checkpoint", type=Path, default=None,
+                        help="Progress file (default: output CSV with .checkpoint.json suffix)")
+    parser.add_argument("--no-resume", action="store_true",
+                        help="Discard previous checkpoint progress and start a fresh result set")
     parser.add_argument("--exhaustive", action="store_true", help="Also search name-only and unaccented variants")
     parser.add_argument("--include-undated", action="store_true", help="Include GEDCOM people with no birth year")
     parser.add_argument("--since", type=int, default=DEFAULT_FIRST_YEAR)
