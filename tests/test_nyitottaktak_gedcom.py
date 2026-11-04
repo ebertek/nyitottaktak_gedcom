@@ -295,6 +295,51 @@ class GedcomTests(unittest.TestCase):
             self.assertFalse(too_many)
             self.assertEqual(fetch.call_count, 11)
 
+    def test_archive_type_notes_do_not_assert_historical_activity(self):
+        cases = (
+            ("6-os karton", "State-security registration card", "unsuccessful"),
+            ("B napló", "Register of archived recruitment dossiers", "1956"),
+            ("B-napló", "Register of archived recruitment dossiers", "1956"),
+            ("B dosszié", "Recruitment dossier", "examination"),
+            ("Mágnesszalag", "H-register magnetic-tape data", "1990"),
+            ("H-adattár", "H-register magnetic-tape data", "1990"),
+        )
+        for record_type, expected_summary, expected_text in cases:
+            with self.subTest(record_type=record_type):
+                summary, caveat = finder.archive_source_context(record_type)
+                self.assertEqual(summary, expected_summary)
+                self.assertIn(expected_text, caveat)
+        summary, caveat = finder.archive_source_context("Unknown source")
+        self.assertIn("not recognized", summary)
+        self.assertIn("original document", caveat)
+
+    def test_legacy_checkpoint_rows_gain_context_on_csv_export(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "matches.csv"
+            # Rows written by earlier checkpoint versions have no new context keys.
+            saved = {
+                "I1": {"rows": [{
+                    "gedcom_id": "I1",
+                    "archive_guid": "fictional-record-1",
+                    "archive_record_type": "6-os karton",
+                    "match_score": 85,
+                }]},
+            }
+            columns = [
+                "gedcom_id", "archive_guid", "archive_record_type",
+                "match_score", "archive_source_summary",
+                "archive_interpretation_limits",
+            ]
+            finder.write_report(output, columns, saved)
+            with output.open(encoding="utf-8-sig", newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 1)
+            self.assertEqual(rows[0]["archive_source_summary"],
+                             "State-security registration card")
+            self.assertIn("fictitious recruitment",
+                          rows[0]["archive_interpretation_limits"])
+            self.assertEqual(rows[0]["archive_guid"], "fictional-record-1")
+
     def test_api_response_is_cached_without_live_network(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = finder.ApiClient(Path(tmp), delay=0.5, max_requests=3, refresh=False)
