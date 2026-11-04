@@ -28,6 +28,8 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
+from review_report import review_files, write_review_report
+
 API = "https://nyitottaktak.hu/api/search"
 API_META = "https://nyitottaktak.hu/api/meta"
 DEFAULT_FIRST_YEAR = 1850
@@ -855,6 +857,12 @@ def run(args: argparse.Namespace) -> None:
         })
         write_report(args.output, columns, completed)
         write_coverage_report(coverage_path, eligible, completed)
+        review_path = getattr(args, "review_output", None) or args.output.with_suffix(".review.csv")
+        write_review_report(
+            review_path,
+            [row for entry in completed.values() for row in entry.get("rows", [])],
+            coverage_rows(eligible, completed),
+        )
 
     for index, person in enumerate(eligible, 1):
         prior = completed.get(person.xref)
@@ -1043,6 +1051,8 @@ def run(args: argparse.Namespace) -> None:
     print(f"Search coverage: {coverage_counts['completed']} completed, "
           f"{coverage_counts['limited']} limited, "
           f"{coverage_counts['not_completed']} not completed -> {coverage_path}")
+    print(f"Identity review: {getattr(args, 'review_output', None) or args.output.with_suffix('.review.csv')} "
+          "(offline triage, not a finding of historical conduct).")
     if stop_now or errors or incomplete_searches or saved_warnings:
         print("NOTE: Some searches failed or were not completed; absence of matches is not conclusive.")
     print("IMPORTANT: A match is an identity lead, not evidence that someone was an agent.")
@@ -1082,6 +1092,14 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("nyitottaktak_matches.csv"))
     parser.add_argument("--cache-dir", type=Path, default=Path(".nyitottaktak_cache"))
     parser.add_argument("--refresh", action="store_true", help="Refresh cached API responses")
+    parser.add_argument("--review-only", action="store_true",
+                        help="Build grouped candidate review from local CSVs without GEDCOM or network")
+    parser.add_argument("--review-input", type=Path, default=None,
+                        help="Candidate CSV for --review-only (default: --output)")
+    parser.add_argument("--review-coverage-input", type=Path, default=None,
+                        help="Coverage CSV for --review-only (default: derived from candidate CSV)")
+    parser.add_argument("--review-output", type=Path, default=None,
+                        help="Grouped identity review CSV (default: candidate CSV with .review.csv suffix)")
     parser.add_argument("--coverage-only", action="store_true",
                         help="Generate a scan coverage CSV from the GEDCOM and checkpoint without making HTTP requests")
     parser.add_argument("--coverage-output", type=Path, default=None,
@@ -1104,6 +1122,21 @@ def main() -> None:
             check_archive_update(client, args.cache_dir, required=True)
         except ValueError as exc:
             parser.error(str(exc))
+        return
+    if args.review_only:
+        source = args.review_input or args.output
+        coverage = args.review_coverage_input or source.with_suffix(".coverage.csv")
+        target = args.review_output or source.with_suffix(".review.csv")
+        try:
+            people, counts, has_coverage = review_files(source, coverage, target)
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(f"Offline identity review: {people} relatives, "
+              f"{sum(counts.values())} grouped rows -> {target}")
+        if not has_coverage:
+            print(f"NOTE: No coverage report found at {coverage}; "
+                  "unsearched individuals cannot be included.")
+        print("IMPORTANT: These are unverified identity leads, not evidence of collaboration.")
         return
     if args.gedcom is None or not args.gedcom.is_file():
         parser.error(f"GEDCOM file not found: {args.gedcom}")
