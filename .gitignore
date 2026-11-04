@@ -179,3 +179,11 @@ cython_debug/
 #  refer to https://docs.cursor.com/context/ignore-files
 .cursorignore
 .cursorindexingignore
+# Private genealogy inputs and generated archival research output
+*.ged
+*.gedcom
+*.GED
+*.GEDCOM
+.nyitottaktak_cache/
+nyitottaktak_matches*.csv
+nyitottaktak_matches*.errors.txt
