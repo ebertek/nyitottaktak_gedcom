@@ -185,13 +185,16 @@ class GedcomTests(unittest.TestCase):
         state = json.loads(args.output.with_suffix(".checkpoint.json").read_text(encoding="utf-8"))
         self.assertEqual(set(state["completed"]), {"I1"})
 
+        second_calls = [0]
+
         def second_pass(_client, _filters):
+            second_calls[0] += 1
             return [], False, "https://example.invalid/search", False
 
-        with patch.object(finder.ApiClient, "search_all", second_pass) as fetch:
+        with patch.object(finder.ApiClient, "search_all", second_pass):
             with contextlib.redirect_stdout(io.StringIO()):
                 finder.run(args)
-            self.assertGreaterEqual(fetch.call_count, 1)
+            self.assertGreaterEqual(second_calls[0], 1)
         with args.output.open(encoding="utf-8-sig", newline="") as handle:
             rows = list(csv.DictReader(handle))
         self.assertEqual(len(rows), 1)
