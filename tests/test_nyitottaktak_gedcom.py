@@ -232,6 +232,69 @@ class GedcomTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "different GEDCOM or search configuration"):
             finder.run(args)
 
+    def test_all_switch_uses_unlimited_local_budgets(self):
+        with patch("sys.argv", ["nyitottaktak_gedcom.py", str(self.path), "--all"]), \
+             patch.object(finder, "run") as run_mock:
+            finder.main()
+        args = run_mock.call_args.args[0]
+        self.assertEqual(args.max_people, 0)
+        self.assertEqual(args.max_requests, 0)
+        self.assertFalse(args.include_undated)
+        self.assertFalse(args.execute)
+
+    def test_no_people_cap_preserves_all_eligible_people(self):
+        args = self.scan_args(person_ids=[])
+        args.person_id = []
+        args.execute = False
+        args.max_people = 0
+        with contextlib.redirect_stdout(io.StringIO()) as output:
+            finder.run(args)
+        rendered = output.getvalue()
+        self.assertIn("I1: Fenyvesi Ágnes", rendered)
+        self.assertIn("I4: Pusztai Lili", rendered)
+
+    def test_zero_request_budget_allows_more_than_default(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = finder.ApiClient(Path(tmp), delay=0.5, max_requests=0, refresh=False)
+            response = {"results": [], "total": 0, "page_size": 25}
+            def fake_response(_request, timeout):
+                return FakeReply(response)
+            with patch.object(finder, "urlopen", side_effect=fake_response) as requests, \
+                 patch.object(finder.time, "sleep"):
+                for index in range(251):
+                    client.fetch({"nev": f"Fictional-{index}", "page": 1})
+            self.assertEqual(client.requests, 251)
+            self.assertEqual(requests.call_count, 251)
+
+    def test_explicit_request_budget_still_enforced(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = finder.ApiClient(Path(tmp), delay=0.5, max_requests=2, refresh=False)
+            def fake_response(_request, timeout):
+                return FakeReply({"results": [], "total": 0, "page_size": 25})
+            with patch.object(finder, "urlopen", side_effect=fake_response), \
+                 patch.object(finder.time, "sleep"):
+                client.fetch({"nev": "Fictional-A"})
+                client.fetch({"nev": "Fictional-B"})
+                with self.assertRaisesRegex(RuntimeError, "Request budget reached"):
+                    client.fetch({"nev": "Fictional-C"})
+
+    def test_pagination_without_reported_cap_does_not_stop_at_250(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            client = finder.ApiClient(Path(tmp), delay=0.5, max_requests=0, refresh=False)
+            def page_response(params):
+                page = params["page"]
+                return {
+                    "results": [{"guid": f"fictional-{page}-{i}"} for i in range(25)],
+                    "page_size": 25,
+                    "total": 275,
+                    "page": page,
+                }
+            with patch.object(client, "fetch", side_effect=page_response) as fetch:
+                rows, too_many, _url, _missing = client.search_all({"nev": "Fictional"})
+            self.assertEqual(len(rows), 275)
+            self.assertFalse(too_many)
+            self.assertEqual(fetch.call_count, 11)
+
     def test_api_response_is_cached_without_live_network(self):
         with tempfile.TemporaryDirectory() as tmp:
             client = finder.ApiClient(Path(tmp), delay=0.5, max_requests=3, refresh=False)
