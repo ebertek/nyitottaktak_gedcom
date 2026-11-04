@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+from collections import Counter
 import hashlib
 import json
 import re
@@ -712,6 +713,42 @@ def write_report(output: Path, columns: list[str], completed: dict) -> None:
     temporary.replace(output)
 
 
+def coverage_rows(eligible: list[Person], completed: dict) -> list[dict]:
+    """Report query processing, not archival completeness or personal conduct."""
+    rows = []
+    for person in eligible:
+        entry = completed.get(person.xref)
+        warnings = (entry or {}).get("warnings") or []
+        status = ("not_completed" if entry is None else
+                  "limited" if warnings else "completed")
+        rows.append({
+            "gedcom_id": person.xref,
+            "gedcom_name": (entry or {}).get("name") or (candidate_names(person) or [""])[0],
+            "gedcom_birth": person.born,
+            "search_status": status,
+            "raw_records": (entry or {}).get("raw_count", ""),
+            "candidate_rows": len(entry.get("rows", [])) if entry is not None else "",
+            "archive_database_date": (entry or {}).get("source_updated") or "",
+            "search_warnings": " | ".join(str(w) for w in warnings),
+        })
+    return rows
+
+
+def write_coverage_report(output: Path, eligible: list[Person], completed: dict) -> Counter:
+    """Atomically write selected people's scan status, including missing entries."""
+    rows = coverage_rows(eligible, completed)
+    columns = ["gedcom_id", "gedcom_name", "gedcom_birth", "search_status",
+               "raw_records", "candidate_rows", "archive_database_date", "search_warnings"]
+    output.parent.mkdir(parents=True, exist_ok=True)
+    temporary = output.with_name(output.name + ".tmp")
+    with temporary.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(handle, fieldnames=columns)
+        writer.writeheader()
+        writer.writerows(rows)
+    temporary.replace(output)
+    return Counter(row["search_status"] for row in rows)
+
+
 def run(args: argparse.Namespace) -> None:
     people, families = read_gedcom(args.gedcom)
     eligible: list[Person] = []
@@ -747,6 +784,18 @@ def run(args: argparse.Namespace) -> None:
     # Zero means no client-side cap on eligible people.
     if args.max_people:
         eligible = eligible[:args.max_people]
+    coverage_path = args.coverage_output or args.output.with_suffix(".coverage.csv")
+    if args.coverage_only:
+        checkpoint_path = args.checkpoint or args.output.with_suffix(".checkpoint.json")
+        current = load_checkpoint(
+            checkpoint_path, hashlib.sha256(args.gedcom.read_bytes()).hexdigest(),
+            checkpoint_config(args))
+        counts = write_coverage_report(coverage_path, eligible, current)
+        print(f"Coverage: {counts['completed']} completed, {counts['limited']} limited, "
+              f"{counts['not_completed']} not completed -> {coverage_path}")
+        print("NOTE: Completed means the tool finished its planned queries without reported "
+              "limits, not that the archive contains every relevant document.")
+        return
     if not args.execute:
         print("PREVIEW ONLY. Add --execute to query the site. First eligible people:")
         for person in eligible[:20]:
@@ -805,6 +854,7 @@ def run(args: argparse.Namespace) -> None:
             "completed": completed,
         })
         write_report(args.output, columns, completed)
+        write_coverage_report(coverage_path, eligible, completed)
 
     for index, person in enumerate(eligible, 1):
         prior = completed.get(person.xref)
@@ -854,7 +904,9 @@ def run(args: argparse.Namespace) -> None:
         for name in to_search:
             deduped_steps = build_steps(name, year, birthplace, mothers, args)
             if not deduped_steps:
-                errors.append(f"{person.xref}: No valid search-name variant for {name!r} (2–25 characters)")
+                warning = f"{person.xref}: No valid search-name variant for {name!r} (2–25 characters)"
+                errors.append(warning)
+                person_warnings.append(warning)
                 continue
             for step_num, step in enumerate(deduped_steps):
                 # Only stop broadening on an actual identity candidate, rather
@@ -871,7 +923,10 @@ def run(args: argparse.Namespace) -> None:
                     if exc.status == 400:
                         # Usually a rejected filter combination. Keep going to a
                         # less-specific query and record what the server said.
+                        warning = f"{person.xref}: HTTP 400 rejected search filter; broader alternatives attempted"
                         recovered_400s.append(f"{person.xref}: {exc}")
+                        if warning not in person_warnings:
+                            person_warnings.append(warning)
                         print(f"  WARN: rejected filter (HTTP 400); trying broader search. {exc.detail[:120]}", file=sys.stderr)
                         continue
                     errors.append(f"{person.xref}: {exc}")
@@ -984,6 +1039,10 @@ def run(args: argparse.Namespace) -> None:
         completed, {person.xref for person in eligible}, archive_updated)
     print(f"Archive freshness: {fresh} current, {older} older snapshot, {unknown} unknown "
           "among completed people in this scope.")
+    coverage_counts = Counter(row["search_status"] for row in coverage_rows(eligible, completed))
+    print(f"Search coverage: {coverage_counts['completed']} completed, "
+          f"{coverage_counts['limited']} limited, "
+          f"{coverage_counts['not_completed']} not completed -> {coverage_path}")
     if stop_now or errors or incomplete_searches or saved_warnings:
         print("NOTE: Some searches failed or were not completed; absence of matches is not conclusive.")
     print("IMPORTANT: A match is an identity lead, not evidence that someone was an agent.")
@@ -1023,6 +1082,10 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("nyitottaktak_matches.csv"))
     parser.add_argument("--cache-dir", type=Path, default=Path(".nyitottaktak_cache"))
     parser.add_argument("--refresh", action="store_true", help="Refresh cached API responses")
+    parser.add_argument("--coverage-only", action="store_true",
+                        help="Generate a scan coverage CSV from the GEDCOM and checkpoint without making HTTP requests")
+    parser.add_argument("--coverage-output", type=Path, default=None,
+                        help="Coverage CSV path (default: output CSV with .coverage.csv suffix)")
     parser.add_argument("--check-updates", action="store_true",
                         help="Check /api/meta for changes and exit (GEDCOM file not required)")
     parser.add_argument("--refresh-stale", action="store_true",
