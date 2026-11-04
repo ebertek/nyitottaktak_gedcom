@@ -141,6 +141,38 @@ The offline audit compares the GEDCOM and selected search settings with your che
 
 A `limited` entry is not re-queried automatically, because a `too_many` query could remain inherently broad. Manually inspect the reported warnings, narrow identity filters or adjust your search strategy, then explicitly refresh the selected individual if needed. Existing checkpoints from earlier script versions may lack old HTTP 400 warnings; the new report cannot reconstruct historical warnings that were never saved.
 
+## Offline candidate review
+
+After your scan (or at any time after the candidate CSV has been saved), generate a **person-level identity review report**, entirely offline:
+
+```bash
+# Uses nyitottaktak_matches.csv and, when present, the coverage CSV
+python nyitottaktak_gedcom.py --review-only
+
+# Custom private input/output paths, still without a GEDCOM or network calls
+python nyitottaktak_gedcom.py --review-only \
+  --review-input my_matches.csv \
+  --review-coverage-input my_matches.coverage.csv \
+  --review-output my_matches.review.csv
+```
+
+The script also writes `nyitottaktak_matches.review.csv` automatically after each checkpointed search (alongside the existing candidate and coverage CSVs).
+
+The grouped report has one row per relative represented in the **coverage report**, including those with zero candidate records. If no coverage CSV is available, only relatives who have candidate rows can be included, and their search status is `not_reported`.
+
+Fields include candidate count, distinct archive records, record types, the highest **identity** score, the top-scoring candidate's archive link and identity evidence, search completeness, and explanatory review flags:
+
+- `conflicting_identity_data`: date, mother's name or birthplace contradicts the GEDCOM for the *top candidate*.
+- `archive_guid_shared_by_multiple_relatives`: the same archival document has candidate rows for two or more GEDCOM people.
+- `incomplete_search`: coverage was capped, rejected, or interrupted.
+- `multiple_identity_leads`: multiple potential archival records for one person.
+- `needs_additional_identifiers`: a top candidate lacks birth, maternal or birthplace corroboration.
+- `no_candidate_leads`: no accepted candidate rows; **not proof of archival absence**.
+
+All flags and `review_order` are **manual identity-verification aids**, not assessments of recruitment or collaboration. Only the best-scoring candidate is used for the top candidate's contradiction flags; conflicts from lower-scoring leads remain in the original detailed matches CSV. Always open the original archival document before making an identity determination.
+
+**Do not upload the private reports, GEDCOM, or archive query cache to this public GitHub repository.** The report is generated from the already saved local CSVs; no network access is required in `--review-only` mode.
+
 ## Output
 
 The default report is `nyitottaktak_matches.csv`, with both GEDCOM and archive identity fields, a **heuristic review score**, a rationale, query URL and original document URL. Scores prioritize review; **they are not probabilities or judgments about historical conduct**. The separate source context columns explain document types but never determine whether a particular person cooperated. Errors and incomplete queries are written to `nyitottaktak_matches.errors.txt` when applicable. `--verbose` shows each outgoing filter set and the result count, which is useful for investigating zero-hit queries.
