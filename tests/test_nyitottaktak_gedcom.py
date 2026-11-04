@@ -1,6 +1,7 @@
 """Offline regression tests using fictional GEDCOM records."""
 
 import contextlib
+import csv
 import io
 import json
 import tempfile
@@ -28,6 +29,11 @@ SAMPLE_GEDCOM = """0 HEAD
 0 @I3@ INDI
 1 NAME Ilona //
 2 GIVN Ilona
+0 @I4@ INDI
+1 NAME Lili /Pusztai/
+1 BIRT
+2 DATE 4 MAR 1928
+2 PLAC Pécs, Hungary
 0 @F1@ FAM
 1 WIFE @I2@
 1 CHIL @I1@
@@ -118,6 +124,88 @@ class GedcomTests(unittest.TestCase):
         self.assertNotIn("I2:", text)
         args.person_id = ["I999"]
         with self.assertRaisesRegex(ValueError, "I999"):
+            finder.run(args)
+
+    def scan_args(self, person_ids=None):
+        return SimpleNamespace(
+            gedcom=self.path, person_id=person_ids or ["I1"], include_undated=False,
+            since=1850, until=1975, order="historical", max_people=5,
+            execute=True, verbose=False, exhaustive=False,
+            api_year_ceiling=1990, year_tolerance=2, min_score=35,
+            output=Path(self.tmp.name) / "nyitottaktak_matches.csv",
+            checkpoint=None, no_resume=False, refresh=False,
+            cache_dir=Path(self.tmp.name) / "api_cache", delay=0.5, max_requests=3,
+        )
+
+    def test_checkpoint_resume_preserves_result_without_requery(self):
+        args = self.scan_args()
+        match = {
+            "guid": "fictional-record-1", "nev": "Fenyvesi Ágnes",
+            "szul_ido": "1966.10.17", "szul_hely": "Pécs",
+            "anyja_neve": "László Teréz", "irattipus": "6-os karton",
+        }
+        answer = ([match], False, "https://example.invalid/search", False)
+        with patch.object(finder.ApiClient, "search_all", return_value=answer) as fetch:
+            with contextlib.redirect_stdout(io.StringIO()):
+                finder.run(args)
+            self.assertEqual(fetch.call_count, 1)
+        checkpoint = args.output.with_suffix(".checkpoint.json")
+        self.assertTrue(checkpoint.exists())
+        with args.output.open(encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(len(rows), 1)
+        with patch.object(finder.ApiClient, "search_all", side_effect=AssertionError("requeried")):
+            with contextlib.redirect_stdout(io.StringIO()):
+                finder.run(args)
+        with args.output.open(encoding="utf-8-sig", newline="") as handle:
+            self.assertEqual(len(list(csv.DictReader(handle))), 1)
+
+    def test_checkpoint_preserves_completed_people_on_request_budget_stop(self):
+        args = self.scan_args(["I1", "I4"])
+        match = {
+            "guid": "fictional-record-1", "nev": "Fenyvesi Ágnes",
+            "szul_ido": "1966.10.17", "szul_hely": "Pécs",
+            "anyja_neve": "László Teréz",
+        }
+        call_count = [0]
+
+        def first_pass(_client, _filters):
+            call_count[0] += 1
+            if call_count[0] > 1:
+                raise RuntimeError("Request budget reached (3); rerun to continue from cache")
+            return [match], False, "https://example.invalid/search", False
+
+        with patch.object(finder.ApiClient, "search_all", first_pass):
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                finder.run(args)
+        with args.output.open(encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["gedcom_id"], "I1")
+        state = json.loads(args.output.with_suffix(".checkpoint.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(state["completed"]), {"I1"})
+
+        def second_pass(_client, _filters):
+            return [], False, "https://example.invalid/search", False
+
+        with patch.object(finder.ApiClient, "search_all", second_pass) as fetch:
+            with contextlib.redirect_stdout(io.StringIO()):
+                finder.run(args)
+            self.assertGreaterEqual(fetch.call_count, 1)
+        with args.output.open(encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(len(rows), 1)
+        state = json.loads(args.output.with_suffix(".checkpoint.json").read_text(encoding="utf-8"))
+        self.assertEqual(set(state["completed"]), {"I1", "I4"})
+
+    def test_checkpoint_rejects_changed_configuration(self):
+        args = self.scan_args()
+        with patch.object(finder.ApiClient, "search_all",
+                          return_value=([], False, "https://example.invalid/search", False)):
+            with contextlib.redirect_stdout(io.StringIO()):
+                finder.run(args)
+        args.exhaustive = True
+        with self.assertRaisesRegex(ValueError, "different GEDCOM or search configuration"):
             finder.run(args)
 
     def test_api_response_is_cached_without_live_network(self):
