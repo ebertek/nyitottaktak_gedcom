@@ -31,6 +31,26 @@ python nyitottaktak_gedcom.py 'Family Tree.ged' --execute \
 
 The default order prioritizes birth years close to 1930; it is **not** the same as GEDCOM file order. Use `--order gedcom` to preserve the file order, or `--person-id` to select particular relatives directly. By default, people without birth years are excluded; `--include-undated` opts them in. Individuals without usable surnames are always excluded.
 
+### Resuming long searches
+
+Each successfully searched person is checkpointed immediately to `nyitottaktak_matches.checkpoint.json` (derived from `--output`). The CSV is also rewritten **atomically and cumulatively** after each completed individual. When you run **the same search again**, already completed individuals are skipped and their candidate rows are retained; only unfinished individuals generate new API requests. Cached HTTP replies additionally avoid querying the same URL twice.
+
+```bash
+# Search your whole tree in successive batches of up to 250 NEW HTTP requests each
+python nyitottaktak_gedcom.py 'Family Tree.ged' --execute \
+  --exhaustive --max-people 1000 --max-requests 250 --delay 2
+
+# Run the same command again to continue from the checkpoint
+python nyitottaktak_gedcom.py 'Family Tree.ged' --execute \
+  --exhaustive --max-people 1000 --max-requests 250 --delay 2
+```
+
+**Important:** `--max-people` is the size of the selected historical prefix, **not** the number of new people per invocation. To progress beyond the first 30, increase it (e.g., `--max-people 1000`).
+
+The checkpoint verifies the GEDCOM file contents and search-affecting settings. If either changes, start a separate checkpoint with `--checkpoint other-run.json`, or explicitly discard previous checkpoint progress with `--no-resume`. `--refresh` reprocesses selected people against the live API. A first run using this version will back up an existing v4 output CSV as `nyitottaktak_matches.pre-checkpoint.csv`; previously cached API responses are reused to reconstruct completed searches.
+
+Keep the checkpoint and CSV private. Neither contains a verified conclusion about historical conduct.
+
 The default `--max-people` is 30 and `--max-requests` is 250. A local cache (`.nyitottaktak_cache/`) prevents duplicate requests on reruns. `--refresh` bypasses it. The minimum delay is 0.5 seconds between uncached requests; use a longer delay for large trees. Respect the archive operator's limits and stop on access-control or rate-limit responses.
 
 ### GEDCOM fields
