@@ -46,6 +46,7 @@ YEAR = re.compile(r"(?<!\d)(1[6789]\d{2}|20\d{2})(?!\d)")
 class Person:
     xref: str
     names: list[tuple[str, str]] = field(default_factory=list)  # (name, type)
+    structured_names: dict[int, dict[str, str]] = field(default_factory=dict)
     born: str = ""
     birthplace: str = ""
     childhood_families: list[str] = field(default_factory=list)
@@ -99,7 +100,7 @@ def read_gedcom(path: Path) -> tuple[dict[str, Person], dict[str, Family]]:
             p = people[owner]
             if level == 1:
                 section = tag
-                if tag == "NAME" and value:
+                if tag == "NAME":
                     p.names.append((value, ""))
                     name_index = len(p.names) - 1
                 elif tag == "FAMC" and value.startswith("@"):
@@ -114,9 +115,12 @@ def read_gedcom(path: Path) -> tuple[dict[str, Person], dict[str, Family]]:
                         p.born = value
                     elif tag == "PLAC":
                         p.birthplace = value
-                elif section == "NAME" and tag == "TYPE" and name_index >= 0:
-                    existing = p.names[name_index][0]
-                    p.names[name_index] = (existing, value.lower())
+                elif section == "NAME" and name_index >= 0:
+                    if tag == "TYPE":
+                        existing = p.names[name_index][0]
+                        p.names[name_index] = (existing, value.lower())
+                    elif tag in ("GIVN", "SURN"):
+                        p.structured_names.setdefault(name_index, {})[tag] = value
         elif kind == "FAM" and level == 1:
             f = families[owner]
             if tag == "WIFE":
@@ -171,12 +175,21 @@ def candidate_names(person: Person) -> list[str]:
     # Prefer birth/primary names; search explicitly recorded married/alias names
     # as alternatives, without guessing a surname from the spouse.
     # Filter at the source, so unnamed people are skipped in preview AND execute.
-    sorted_names = sorted(person.names, key=lambda n: (n[1] not in ("birth", ""), n[1] == "married"))
+    sorted_names = sorted(enumerate(person.names),
+                          key=lambda n: (n[1][1] not in ("birth", ""), n[1][1] == "married"))
     names: list[str] = []
-    for raw, _type in sorted_names:
-        if not has_gedcom_surname(raw):
-            continue
-        candidate = human_name(raw)
+    for index, (raw, _type) in sorted_names:
+        if has_gedcom_surname(raw):
+            candidate = human_name(raw)
+        else:
+            # GEDCOM permits a structured GIVN/SURN even when NAME is blank
+            # or lacks the traditional /Surname/ delimiters.
+            components = person.structured_names.get(index, {})
+            surname = components.get("SURN", "").strip(" /")
+            given = components.get("GIVN", "").strip()
+            if not norm(surname) or norm(surname) in MISSING_SURNAMES or not given:
+                continue
+            candidate = f"{surname} {given}"
         if candidate and candidate.casefold() not in {n.casefold() for n in names}:
             names.append(candidate)
     return names
@@ -500,7 +513,14 @@ def run(args: argparse.Namespace) -> None:
     eligible: list[Person] = []
     missing_years = 0
     missing_surnames = 0
+    requested_ids = [value.strip().strip("@") for value in (args.person_id or [])]
+    missing_ids = [value for value in requested_ids if value not in people]
+    if missing_ids:
+        raise ValueError("GEDCOM person ID(s) not found: " + ", ".join(missing_ids))
+    requested_set = set(requested_ids)
     for person in people.values():
+        if requested_set and person.xref not in requested_set:
+            continue
         yr = birth_year(person.born)
         if not candidate_names(person):
             missing_surnames += 1
@@ -514,7 +534,9 @@ def run(args: argparse.Namespace) -> None:
     print(f"Loaded {len(people)} individuals; {len(eligible)} eligible; "
           f"{missing_surnames} without a surname skipped; "
           f"{missing_years} without birth year skipped.")
-    if args.order == "historical":
+    if requested_ids:
+        eligible.sort(key=lambda person: requested_ids.index(person.xref))
+    elif args.order == "historical":
         eligible.sort(key=historical_order)
     elif args.order == "oldest":
         eligible.sort(key=lambda p: (birth_year(p.born) if birth_year(p.born) is not None else 9999, p.xref))
@@ -575,6 +597,8 @@ def run(args: argparse.Namespace) -> None:
                         any(score(person, hit[0], names, mothers)[0] >= args.min_score
                             for hit in archive_hits.values())):
                     break
+                if args.verbose:
+                    print(f"  QUERY: {urlencode(step)}", flush=True)
                 try:
                     results, capped, url, includes_missing_birth_dates = client.search_all(step)
                 except ApiQueryError as exc:
@@ -597,6 +621,9 @@ def run(args: argparse.Namespace) -> None:
                         stop_now = True
                         break
                     continue
+                if args.verbose:
+                    print(f"  RESULT: {len(results)} records; too_many={capped}; "
+                          f"missing_birth_dates={includes_missing_birth_dates}", flush=True)
                 if capped:
                     warning = f"{person.xref}: search for {name!r} returned too_many; narrow the filters"
                     incomplete_searches.append(warning)
@@ -678,6 +705,9 @@ def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("gedcom", type=Path, help="Local .ged/.gedcom file")
     parser.add_argument("--execute", action="store_true", help="Actually send API requests (otherwise preview only)")
+    parser.add_argument("--person-id", action="append", default=[], metavar="ID",
+                        help="Only search this GEDCOM individual (repeatable; e.g. I123 or @I123@)")
+    parser.add_argument("--verbose", action="store_true", help="Print API query filters and result counts")
     parser.add_argument("--exhaustive", action="store_true", help="Also search name-only and unaccented variants")
     parser.add_argument("--include-undated", action="store_true", help="Include GEDCOM people with no birth year")
     parser.add_argument("--since", type=int, default=DEFAULT_FIRST_YEAR)
@@ -699,7 +729,10 @@ def main() -> None:
         parser.error(f"GEDCOM file not found: {args.gedcom}")
     if args.delay < 0.5 or args.max_people < 1 or args.max_requests < 1 or args.min_score < 0 or args.year_tolerance < 0:
         parser.error("Use --delay >= 0.5, positive budgets, nonnegative score and tolerance")
-    run(args)
+    try:
+        run(args)
+    except ValueError as exc:
+        parser.error(str(exc))
 
 
 if __name__ == "__main__":
