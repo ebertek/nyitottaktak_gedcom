@@ -410,7 +410,9 @@ class ApiClient:
         if cache_file.exists() and not self.refresh:
             self.cached_responses += 1
             return json.loads(cache_file.read_text(encoding="utf-8"))
-        if self.requests >= self.max_requests:
+        # A local safety budget, not an API-imposed quota. Zero disables
+        # the local cap; pacing and server-side rejection still apply.
+        if self.max_requests and self.requests >= self.max_requests:
             raise RuntimeError(f"Request budget reached ({self.max_requests}); rerun to continue from cache")
         elapsed = time.monotonic() - self.last_call
         if self.last_call and elapsed < self.delay:
@@ -593,7 +595,9 @@ def run(args: argparse.Namespace) -> None:
         eligible.sort(key=historical_order)
     elif args.order == "oldest":
         eligible.sort(key=lambda p: (birth_year(p.born) if birth_year(p.born) is not None else 9999, p.xref))
-    eligible = eligible[:args.max_people]
+    # Zero means no client-side cap on eligible people.
+    if args.max_people:
+        eligible = eligible[:args.max_people]
     if not args.execute:
         print("PREVIEW ONLY. Add --execute to query the site. First eligible people:")
         for person in eligible[:20]:
@@ -823,8 +827,13 @@ def main() -> None:
                         help="Maximum birth year used in API filters (website permits 1850–1990; default: 1990; 0 resets to 1990)")
     parser.add_argument("--order", choices=("historical", "oldest", "gedcom"), default="historical",
                         help="Search ordering; historical prioritizes adults around 1956 (default)")
-    parser.add_argument("--max-people", type=int, default=30)
-    parser.add_argument("--max-requests", type=int, default=250)
+    parser.add_argument("--max-people", type=int, default=30,
+                        help="Maximum eligible people to process (default: 30; 0 = all)")
+    parser.add_argument("--max-requests", type=int, default=250,
+                        help="Local HTTP request budget per invocation (default: 250; 0 = unlimited)")
+    parser.add_argument("--all", action="store_true",
+                        help="Process all eligible people in one invocation (sets both budgets to unlimited; "
+                             "add --include-undated separately if needed)")
     parser.add_argument("--delay", type=float, default=1.5, help="Minimum seconds between uncached requests")
     parser.add_argument("--min-score", type=int, default=35)
     parser.add_argument("--output", type=Path, default=Path("nyitottaktak_matches.csv"))
@@ -833,8 +842,12 @@ def main() -> None:
     args = parser.parse_args()
     if not args.gedcom.is_file():
         parser.error(f"GEDCOM file not found: {args.gedcom}")
-    if args.delay < 0.5 or args.max_people < 1 or args.max_requests < 1 or args.min_score < 0 or args.year_tolerance < 0:
-        parser.error("Use --delay >= 0.5, positive budgets, nonnegative score and tolerance")
+    if args.all:
+        args.max_people = 0
+        args.max_requests = 0
+    if (args.delay < 0.5 or args.max_people < 0 or args.max_requests < 0 or
+            args.min_score < 0 or args.year_tolerance < 0):
+        parser.error("Use --delay >= 0.5, nonnegative budgets (0 = unlimited), score and tolerance")
     try:
         run(args)
     except ValueError as exc:
