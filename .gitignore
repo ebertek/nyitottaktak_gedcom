@@ -187,3 +187,5 @@ cython_debug/
 .nyitottaktak_cache/
 nyitottaktak_matches*.csv
 nyitottaktak_matches*.errors.txt
+*.checkpoint.json
+*.checkpoint.json.tmp
