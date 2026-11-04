@@ -457,7 +457,9 @@ class ApiClient:
                 break
             page_size = max(1, int(payload.get("page_size") or 25))
             total = int(payload.get("total") or 0)
-            cap = int(payload.get("max_results") or 250)
+            # Only respect a result cap if the server explicitly reports one.
+            # A former hard-coded 250 fallback could silently truncate searches.
+            cap = int(payload.get("max_results") or total)
             if page * page_size >= min(total, cap) or not payload.get("results"):
                 break
             page += 1
