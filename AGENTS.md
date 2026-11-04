@@ -8,3 +8,6 @@
 - Results are **identity leads only** and must not imply an individual was a collaborator. Keep negative/ambiguous identity evidence visible.
 - Default to preview-only and conservative, sequential HTTP requests. Honor 403/429, cache responses, and never attempt access-control bypass.
 - All CI tests must be offline, with synthetic records and mocked network access. Run `python -m unittest discover -s tests -v` and `python -m py_compile nyitottaktak_gedcom.py` for any code changes.
+- Nyitott Akták's FAQ distinguishes a 6-os card (including unsuccessful/fictitious recruitment), 1956–1962 B-napló registers, the incomplete January 1990 H-register snapshot, and gradually published B-dossiers (announced through 2027-02-25). Public search absence is inconclusive; never claim the search proves or disproves historical conduct.
+- Archive source explanations must be derived from the returned `irattipus`, **not** a person's identity-match score, cover name, or apparent historical role. Preserve prior checkpoints when adding derived report columns; compute them at CSV export.
+- The archive updates its online collections over time. HTTP caches/checkpoints are intentionally persistent, so explain `--refresh` when discussing newly published material. No automated live API calls in tests.
