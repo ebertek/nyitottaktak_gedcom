@@ -79,9 +79,28 @@ The site uses `GET /api/search` with `nev`, `szul_tol`, `szul_ig`, `szul_hely`, 
 
 The API can return `too_many` on excessively broad searches, and some archival record types lack birth dates. The tool tracks these limits but cannot guarantee exhaustive coverage or reliable person identification.
 
+## Archive coverage and interpretation
+
+The distinctions below come from Nyitott Akták's [published FAQ and record-type descriptions](https://nyitottaktak.hu/#gyik) (November 4, 2026), not from an inference by this tool. Its database contains selected **1944–1990** state-security records, **not a complete list of all collaborators**:
+
+| Record type | What it contains | Important limitation |
+| --- | --- | --- |
+| **6-os karton** | State-security registration card, including identification and recruitment/network details | Cards were also created for unsuccessful or fictitious recruitment. A card alone cannot establish that meaningful cooperation occurred. |
+| **B-napló** | A register of archived recruitment dossiers | The archive describes only five surviving registers, all from **1956–1962**. A name-only result requires careful identity verification. |
+| **Mágnesszalag / H-adattár** | Surviving electronic registry snapshot representing **January 1990** | Incomplete: people excluded or deceased before 1970 were not recorded, and later entries were also deleted. |
+| **B-dosszié** | Recruitment dossier with potentially detailed records | Publication is being expanded progressively through **February 25, 2027**. The primary documents need historical interpretation. |
+
+The FAQ explicitly warns that records were destroyed, individuals outside the formal network were not entered in these registries, and archived allegations can be inaccurate, incomplete, or reflect the state-security agency's own perspective. **A missing result is not proof of absence; a matching result is not proof of cooperation.** Multiple cover names or registry numbers may correspond to one individual.
+
+The output CSV includes `archive_source_summary` and `archive_interpretation_limits` based **only** on `archive_record_type`. These are explanatory source notes, not an individualized classification. They are derived when the CSV is exported, so existing checkpoints gain them without requesting the same archive records again.
+
+**Database updates:** The archive says it is updated continuously, with B-dossier additions scheduled through February 25, 2027. Cached results and completed checkpoints do not automatically expire when the remote database changes. To recheck existing searches after a known archive update, use `--refresh` (which bypasses the request cache and reprocesses selected people) and preserve earlier CSV exports if you want to compare revisions.
+
+For additional historical verification, the archive directs researchers to [ÁBTL research](https://www.abtl.hu/kutatas/) and its [records-access portal](https://lar.abtl.hu/ords/r/abtl/sb/home).
+
 ## Output
 
-The default report is `nyitottaktak_matches.csv`, with both GEDCOM and archive identity fields, a **heuristic review score**, a rationale, query URL and original document URL. Scores prioritize review; **they are not probabilities or judgments about historical conduct**. Errors and incomplete queries are written to `nyitottaktak_matches.errors.txt` when applicable. `--verbose` shows each outgoing filter set and the result count, which is useful for investigating zero-hit queries.
+The default report is `nyitottaktak_matches.csv`, with both GEDCOM and archive identity fields, a **heuristic review score**, a rationale, query URL and original document URL. Scores prioritize review; **they are not probabilities or judgments about historical conduct**. The separate source context columns explain document types but never determine whether a particular person cooperated. Errors and incomplete queries are written to `nyitottaktak_matches.errors.txt` when applicable. `--verbose` shows each outgoing filter set and the result count, which is useful for investigating zero-hit queries.
 
 ## Privacy
 
