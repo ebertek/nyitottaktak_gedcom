@@ -513,6 +513,51 @@ def historical_order(person: Person) -> tuple:
             person.xref)
 
 
+# Source-type explanations summarize the archive's published FAQ and record-type
+# descriptions (nyitottaktak.hu, accessed 2026-11-04). They explain what the
+# *record type* represents, not the identity or actions of an individual.
+ARCHIVE_SOURCE_NOTES = {
+    "6 os karton": (
+        "State-security registration card",
+        "May concern actual, unsuccessful, or fictitious recruitment; the card "
+        "alone cannot establish whether substantive cooperation occurred.",
+    ),
+    "b naplo": (
+        "Register of archived recruitment dossiers",
+        "Only five surviving registers from 1956–1962 are described by the "
+        "archive; a registry entry alone does not establish collaboration.",
+    ),
+    "b dosszie": (
+        "Recruitment dossier",
+        "Can document recruitment attempts and activity, but historical "
+        "claims and the person's identity require examination of the files.",
+    ),
+    "magnesszalag": (
+        "H-register magnetic-tape data",
+        "An incomplete January 1990 registry snapshot. Earlier exclusions "
+        "and later deletions mean a missing entry is not conclusive.",
+    ),
+    "h adattar": (
+        "H-register magnetic-tape data",
+        "An incomplete January 1990 registry snapshot. Earlier exclusions "
+        "and later deletions mean a missing entry is not conclusive.",
+    ),
+}
+
+
+def archive_source_context(record_type: str) -> tuple[str, str]:
+    """Summarize document provenance without inferring a historical role."""
+    key = norm(record_type)
+    return ARCHIVE_SOURCE_NOTES.get(
+        key,
+        (
+            "Archive document type not recognized",
+            "Check the original document and its source description before "
+            "drawing conclusions about identity or historical activity.",
+        ),
+    )
+
+
 CHECKPOINT_VERSION = 1
 
 
@@ -561,7 +606,15 @@ def write_report(output: Path, columns: list[str], completed: dict) -> None:
     with temporary.open("w", newline="", encoding="utf-8-sig") as handle:
         writer = csv.DictWriter(handle, fieldnames=columns)
         writer.writeheader()
-        writer.writerows(rows)
+        # Derive contextual columns at export time, not in checkpoints. This
+        # enriches previously saved candidate rows without forcing a rescan.
+        for row in rows:
+            summary, limits = archive_source_context(str(row.get("archive_record_type") or ""))
+            writer.writerow({
+                **row,
+                "archive_source_summary": summary,
+                "archive_interpretation_limits": limits,
+            })
     temporary.replace(output)
 
 
@@ -633,7 +686,8 @@ def run(args: argparse.Namespace) -> None:
     columns = ["gedcom_id", "gedcom_name", "gedcom_birth", "gedcom_birth_place", "gedcom_mother",
                "archive_guid", "archive_name", "archive_birth", "archive_birth_place", "archive_mother",
                "archive_cover_name", "archive_record_type", "match_score", "review_priority", "evidence",
-               "searched_name", "api_search_url", "archive_document_url"]
+               "searched_name", "api_search_url", "archive_document_url",
+               "archive_source_summary", "archive_interpretation_limits"]
     errors: list[str] = []
     recovered_400s: list[str] = []
     incomplete_searches: list[str] = []
@@ -807,6 +861,8 @@ def run(args: argparse.Namespace) -> None:
     if stop_now or errors or incomplete_searches or saved_warnings:
         print("NOTE: Some searches failed or were not completed; absence of matches is not conclusive.")
     print("IMPORTANT: A match is an identity lead, not evidence that someone was an agent.")
+    print("ARCHIVE SCOPE: No public search hit does not rule out archival records "
+          "or historical involvement. Check original documents before drawing conclusions.")
 
 
 def main() -> None:
