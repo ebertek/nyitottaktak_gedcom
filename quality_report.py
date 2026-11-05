@@ -81,15 +81,21 @@ def _corroborations(evidence: str) -> int:
     ))
 
 
-def _best_archive_record(left: dict[str, str], right: dict[str, str]) -> dict[str, str]:
-    """Choose most populated representation when a GUID repeats."""
-    def rank(row: dict[str, str]) -> tuple[int, int, tuple[str, ...]]:
-        return (
-            sum(_present(row.get(field)) for field in ARCHIVE_FIELDS),
-            bool(FULL_DATE.fullmatch(row.get("archive_birth", "").strip())),
-            tuple(row.get(field, "") for field in ARCHIVE_FIELDS),
-        )
-    return max((left, right), key=rank)
+def _merge_archive_fields(left: dict[str, str], right: dict[str, str]) -> dict[str, str]:
+    """Union available fields across duplicate references to one archive GUID.
+
+    This measures whether a field is present, not which conflicting value is
+    correct; only an actual source-document inspection can establish that.
+    """
+    merged = dict(left)
+    for field in ARCHIVE_FIELDS:
+        if not _present(merged.get(field)) and _present(right.get(field)):
+            merged[field] = right[field]
+    old_birth = (merged.get("archive_birth") or "").strip()
+    new_birth = (right.get("archive_birth") or "").strip()
+    if FULL_DATE.fullmatch(new_birth) and not FULL_DATE.fullmatch(old_birth):
+        merged["archive_birth"] = new_birth
+    return merged
 
 
 def quality_rows(candidates: list[dict[str, str]]) -> list[dict[str, object]]:
@@ -121,7 +127,7 @@ def quality_rows(candidates: list[dict[str, str]]) -> list[dict[str, object]]:
             kind_for_row = str(row.get("archive_record_type") or "").strip() or "(unknown)"
             identity = (kind_for_row, *_archive_identity(row, index))
             unique[identity] = (
-                _best_archive_record(unique[identity], row)
+                _merge_archive_fields(unique[identity], row)
                 if identity in unique else row
             )
             if _present(row.get("gedcom_id")):
