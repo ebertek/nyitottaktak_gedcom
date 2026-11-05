@@ -77,20 +77,20 @@ The script uses names, birth dates, birthplaces and mothers' names from GEDCOM r
 
 ### Hungarian names for places
 
-Built-in mappings cover Szabadka/Subotica, Hódság/Odžaci, Péterréve/Bačko Petrovo Selo and Csák/Čakovci. To extend this across **all populated places with Hungarian names listed by GeoNames**, generate a local index once:
+On its first **`--execute` scan**, the script automatically downloads and builds a Hungarian place-name index from [GeoNames](https://www.geonames.org/export/) (CC BY 4.0) if one is not already cached. The default covers Hungary, Romania, Slovakia, Serbia (**including Vojvodina**), Ukraine, Croatia, Austria and Slovenia. It uses geographic IDs and context to avoid merging distinct towns that share a name.
+
+The index is saved as `.nyitottaktak_cache/hungarian_places.csv` and reused by subsequent scans and local rescoring. Offline commands (`--review-only`, `--rescore-only`, `--coverage-only`, preview) never download GeoNames data. To build it in advance for offline rescoring, or to rebuild it after deleting the existing index:
 
 ```bash
-# Historical Hungary region: HU, RO, SK, RS, UA, HR, AT, SI
-# RS includes Vojvodina. Download covers entire present-day countries.
 python scripts/build_place_index.py --download
 
-# Or use the full worldwide GeoNames export (large download)
+# Optional: much larger worldwide index
 python scripts/build_place_index.py --world --download
 ```
 
-The index is saved to `.nyitottaktak_cache/hungarian_places.csv` and automatically used by searches and `--rescore-only`. Use `--place-index path/to/index.csv` to select another file. Building the index is the only operation that contacts GeoNames; scans otherwise contact only Nyitott Akták. Geographic IDs and country context prevent ambiguous names from being merged automatically.
+Use `--place-index path/to/index.csv` for a custom file, or `--no-auto-place-index` to skip the initial download and use built-in aliases only when no index exists. If automatic setup fails, the scan stops with an explanation instead of silently reducing geographic coverage. An existing index is never downloaded again automatically.
 
-Source: [GeoNames downloadable data](https://www.geonames.org/export/) (CC BY 4.0). Its Hungarian-language names are extensive but **not a complete historical gazetteer**. Build a fresh index periodically as its data changes. If you change the index, re-score saved leads with `--rescore-only`; new API search terms require explicitly re-querying selected people (`--refresh`).
+Historical aliases such as Szabadka/Subotica, Hódság/Odžaci, Péterréve/Bačko Petrovo Selo and Csák/Čakovci are included in the built-in fallback. GeoNames contains many more localities, but is **not an exhaustive historical gazetteer**. Re-scoring saved leads after an index update requires `--rescore-only`; discovering new records through different search terms requires an explicit `--refresh` scan.
 
 Searches are sequential and cached. Defaults are **30 people**, **250 HTTP requests per invocation**, and **1.5 seconds** between uncached requests. `--all` removes the local people and request caps; `--max-people 0` or `--max-requests 0` removes them separately. The minimum delay is 0.5 seconds. Server limits such as HTTP 403/429 and `too_many` remain in effect.
 
