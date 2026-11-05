@@ -18,7 +18,7 @@ python nyitottaktak_gedcom.py 'Family Tree.ged' \
 python nyitottaktak_gedcom.py --review-only
 ```
 
-By default, eligible people have a surname and a birth year from **1850–1975**. The first executed scan automatically prepares a local Hungarian place-name index from GeoNames.
+By default, eligible people have a surname and a birth year from **1850–1975**. Reports and checkpoints go in the ignored `results/` directory. The first executed scan prepares a local Hungarian place-name index from GeoNames.
 
 ## Documentation
 
