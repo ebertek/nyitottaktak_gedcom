@@ -91,17 +91,24 @@ def generate_rows(places_zip: Path, alternates_zip: Path) -> list[dict]:
     for row in zip_records(places_zip):
         # geoname: id, name, asciiname, alternate names, lat, lon,
         # feature class, feature code, country code, etc.
-        if (len(row) < 9 or row[6] != "P" or
-                row[0] not in aliases_by_id):
+        if len(row) < 9 or row[6] != "P":
             continue
         geonameid, native, ascii_name, country = row[0], row[1], row[2], row[8]
-        candidates = aliases_by_id[geonameid]
+        candidates = aliases_by_id.get(geonameid, [])
+        # GeoNames often omits a language-tagged 'hu' alternate name for
+        # settlements already named in Hungarian. Include those *within
+        # Hungary* under their native label; otherwise ordinary towns such
+        # as Mezőkövesd disappear from the index completely. Never extend
+        # this fallback outside HU: a foreign native spelling alone does not
+        # establish a historically verified Hungarian-language name.
+        if not candidates and country.upper() != "HU":
+            continue
         # Prefer the language's preferred, non-historic label, with stable
         # deterministic ordering when GeoNames lists several alternatives.
         ranked = sorted(candidates, key=lambda item: (
             not item[1], item[2], len(item[0]), item[0].casefold(),
         ))
-        hungarian = ranked[0][0]
+        hungarian = ranked[0][0] if ranked else native
         known_names = list(dict.fromkeys([
             native, ascii_name, hungarian,
             *[item[0] for item in ranked],
