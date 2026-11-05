@@ -31,6 +31,7 @@ from urllib.request import Request, urlopen
 
 from review_report import review_files, write_review_report
 from research_shortlist import shortlist_files, write_shortlist_report
+from score_audit import audit_candidate_file, write_audit_report
 from quality_report import write_quality_report
 from hungarian_places import PlaceResolver
 from scripts.build_place_index import ensure_default_index
@@ -1245,6 +1246,50 @@ def run(args: argparse.Namespace) -> None:
           "or historical involvement. Check original documents before drawing conclusions.")
 
 
+def recalculate_saved_candidate(row: dict) -> tuple[int, str]:
+    """Reproduce a stored candidate using its chosen GEDCOM match name.
+
+    The CSV saves the winning name used by the original scorer, GEDCOM identity
+    values and archive identity attributes; no GEDCOM or network is needed.
+    """
+    person = Person(
+        xref=row["gedcom_id"], born=row["gedcom_birth"],
+        birthplace=row["gedcom_birth_place"],
+    )
+    archive = {
+        "nev": row["archive_name"], "szul_ido": row["archive_birth"],
+        "szul_hely": row["archive_birth_place"],
+        "anyja_neve": row["archive_mother"],
+    }
+    mothers = [name.strip() for name in row["gedcom_mother"].split(";")
+               if name.strip()]
+    points, evidence, _ = score(person, archive, [row["gedcom_name"]], mothers)
+    return points, evidence
+
+
+def warn_about_saved_scoring(source: Path) -> None:
+    """Explain scoring drift before offline reports interpret stale evidence."""
+    audit = audit_candidate_file(source, recalculate_saved_candidate)
+    if audit.has_drift:
+        print(
+            f"WARNING: Stored evidence differs from current scoring: "
+            f"{audit.score_changed} score changes, "
+            f"{audit.evidence_changed} evidence changes, "
+            f"{audit.classification_changed} classification changes "
+            f"across {audit.checked} checked candidates."
+        )
+        print(
+            "WARNING: Review priorities may be outdated. Run "
+            f"--rescore-only --review-input {source} and use the resulting "
+            "*.rescored.csv for evidence-based reports."
+        )
+    if audit.unverifiable:
+        print(
+            f"WARNING: Could not verify {audit.unverifiable} candidate rows "
+            "(missing/invalid saved values). Use --audit-only for details."
+        )
+
+
 def rescore_csv(source: Path, target: Path, coverage: Path) -> tuple[int, int]:
     """Recalculate existing candidate rows offline without changing checkpoints.
 
@@ -1270,18 +1315,7 @@ def rescore_csv(source: Path, target: Path, coverage: Path) -> tuple[int, int]:
 
     changed = 0
     for row in rows:
-        person = Person(
-            xref=row["gedcom_id"], born=row["gedcom_birth"],
-            birthplace=row["gedcom_birth_place"],
-        )
-        archive = {
-            "nev": row["archive_name"], "szul_ido": row["archive_birth"],
-            "szul_hely": row["archive_birth_place"],
-            "anyja_neve": row["archive_mother"],
-        }
-        mother_names_in_csv = [x.strip() for x in row["gedcom_mother"].split(";") if x.strip()]
-        score_value, evidence, _ = score(
-            person, archive, [row["gedcom_name"]], mother_names_in_csv)
+        score_value, evidence = recalculate_saved_candidate(row)
         try:
             previous_score = int(row["match_score"])
         except ValueError as exc:
@@ -1329,11 +1363,13 @@ def choose_default_output(args: argparse.Namespace, argv: list[str]) -> None:
         return
     if args.review_input is not None and (
             args.review_only or args.rescore_only or args.quality_only
-            or getattr(args, "shortlist_only", False)):
+            or getattr(args, "shortlist_only", False)
+            or getattr(args, "audit_only", False)):
         return
 
     offline_report = (args.review_only or args.rescore_only or
-                      args.quality_only or getattr(args, "shortlist_only", False))
+                      args.quality_only or getattr(args, "shortlist_only", False)
+                      or getattr(args, "audit_only", False))
     coverage = args.coverage_only
     legacy_exists = (LEGACY_DEFAULT_OUTPUT.exists() if offline_report else
                      LEGACY_DEFAULT_OUTPUT.with_suffix(".checkpoint.json").exists())
@@ -1397,6 +1433,11 @@ def main() -> None:
                              "use built-in aliases if no local index exists")
     parser.add_argument("--rescore-only", action="store_true",
                         help="Recalculate existing candidate scores offline into a separate CSV; no GEDCOM or API calls")
+    parser.add_argument("--audit-only", action="store_true",
+                        help="Compare saved scores/evidence with current scoring offline, "
+                             "without changing source files")
+    parser.add_argument("--audit-output", type=Path, default=None,
+                        help="Private score-drift detail CSV (default: input CSV with .audit.csv suffix)")
     parser.add_argument("--quality-only", action="store_true",
                         help="Summarize archive field completeness and identity evidence "
                              "per source from saved candidates; offline and GEDCOM-free")
@@ -1443,7 +1484,7 @@ def main() -> None:
         elif (args.execute and not args.no_auto_place_index and
               not (args.check_updates or args.rescore_only or
                    args.review_only or args.coverage_only or args.quality_only
-                   or args.shortlist_only)):
+                   or args.shortlist_only or args.audit_only)):
             # Only actual archive scans can download additional data. Preview
             # and offline/metadata-only commands preserve their no-GeoNames
             # network guarantees. Check inputs before starting a download.
@@ -1469,6 +1510,32 @@ def main() -> None:
             check_archive_update(client, args.cache_dir, required=True)
         except ValueError as exc:
             parser.error(str(exc))
+        return
+    if args.audit_only:
+        source = args.review_input or args.output
+        target = args.audit_output or source.with_suffix(".audit.csv")
+        coverage = args.review_coverage_input or source.with_suffix(".coverage.csv")
+        protected = (
+            source, coverage, source.with_suffix(".review.csv"),
+            source.with_suffix(".shortlist.csv"),
+            source.with_suffix(".checkpoint.json"),
+        )
+        if target.resolve() in {path.resolve() for path in protected}:
+            parser.error("Audit output must not overwrite source reports or checkpoint")
+        try:
+            audit = audit_candidate_file(source, recalculate_saved_candidate)
+            write_audit_report(target, audit)
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(
+            f"Offline score audit: {audit.checked} checked; "
+            f"{audit.score_changed} score changes; "
+            f"{audit.evidence_changed} evidence changes; "
+            f"{audit.classification_changed} classification changes; "
+            f"{audit.unverifiable} unverifiable -> {target}"
+        )
+        print("NOTE: Audit details contain private identities; do not commit or share the CSV.")
+        print("NOTE: This compares retained saved candidates only; no GEDCOM or archive API requests.")
         return
     if args.quality_only:
         source = args.review_input or args.output
@@ -1510,6 +1577,7 @@ def main() -> None:
         coverage = args.review_coverage_input or source.with_suffix(".coverage.csv")
         target = args.shortlist_output or source.with_suffix(".shortlist.csv")
         try:
+            warn_about_saved_scoring(source)
             count, priorities, has_coverage = shortlist_files(
                 source, coverage, target,
                 include_name_only=args.shortlist_include_name_only,
@@ -1534,6 +1602,7 @@ def main() -> None:
             parser.error("Shortlist output must not overwrite candidate, "
                          "coverage or review CSV")
         try:
+            warn_about_saved_scoring(source)
             people, counts, has_coverage = review_files(source, coverage, target)
         except ValueError as exc:
             parser.error(str(exc))
