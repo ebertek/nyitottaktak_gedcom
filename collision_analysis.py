@@ -12,7 +12,7 @@ from collections import Counter, defaultdict
 from pathlib import Path
 
 from consistency_audit import birth_year
-from review_report import EVIDENCE_CLASSES, classify_identity_evidence
+from review_report import classify_identity_evidence
 
 AGGREGATE_FIELDS = [
     "archive_record_type",
@@ -76,7 +76,7 @@ def collision_profiles(candidates: list[dict]) -> dict[str, dict]:
             profile = "corroborated_lead_present"
             action = (
                 "Inspect independently corroborated person-record comparisons "
-                "first; a shared document is not a shared person"
+                "separately; a shared document is not a shared person"
             )
         elif everyone_name_only:
             profile = "name_only_collision"
