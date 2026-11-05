@@ -24,7 +24,7 @@ def key(text: str) -> str:
 COUNTRY_MARKERS = {
     "serbia": "RS", "szerbia": "RS", "vojvodina": "RS",
     "croatia": "HR", "horvatorszag": "HR", "croatia slavonia": "HR",
-    "romania": "RO", "romania": "RO", "romania": "RO",
+    "romania": "RO",
     "slovakia": "SK", "szlovakia": "SK",
     "ukraine": "UA", "ukrajna": "UA",
     "slovenia": "SI", "szlovenia": "SI",
