@@ -57,6 +57,28 @@ python nyitottaktak_gedcom.py 'Family Tree.ged' \
 
 The offline coverage command uses the GEDCOM and checkpoint. Match the original scan configuration when generating it.
 
+## Offline quality and corroboration summary
+
+To see which archival document types provide usable identifying details **in the saved candidate sample**:
+
+```bash
+python nyitottaktak_gedcom.py --quality-only
+
+# Analyze an alternate candidate CSV without touching the original
+python nyitottaktak_gedcom.py --quality-only \
+  --review-input married_name_matches.csv
+```
+
+The command needs no GEDCOM, network access or API cache. It writes `nyitottaktak_matches.quality.csv` by default (or `--quality-output PATH`) with **aggregate counts only**; it never writes people's names, GEDCOM IDs or archive GUIDs.
+
+The report groups by `archive_record_type` and includes a total across the retained sample:
+
+- **Source completeness**: percentages of distinct archive records with a birth date, birthplace, mother's name and full vs partial dates. Records with the same source and archive GUID count once; missing GUIDs stay separate.
+- **Candidate evidence**: counts of name-only rows, rows supported by one or two independent identity attributes, conflicting identity evidence and score bands. These metrics count candidate rows because one archive record may be considered against multiple GEDCOM identities.
+- **Sample size**: number of candidate rows, distinct GEDCOM IDs and distinct archive records, plus average identity score.
+
+**Crucial limitation:** these are records **already returned and retained** by the search and minimum score threshold, not a representative sample of the archive. A low field-completeness percentage in this CSV does **not** establish the completeness of the full archival source. Name-only rows count records without any archive-side birth date, birthplace or mother field; they are not evidence of someone's conduct.
+
 ## Rescoring existing leads
 
 After upgrading the matching rules or preparing an updated local place index, recalculate scores without contacting the archive:

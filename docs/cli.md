@@ -65,12 +65,15 @@ python nyitottaktak_gedcom.py --review-only
 # Recalculate scores in a new CSV using existing candidate rows (offline)
 python nyitottaktak_gedcom.py --rescore-only
 
+# Summarize field availability and identity corroboration per archive source
+python nyitottaktak_gedcom.py --quality-only
+
 # Rebuild coverage from the GEDCOM and its matching checkpoint (offline)
 python nyitottaktak_gedcom.py 'Family Tree.ged' \
   --all --exhaustive --coverage-only
 ```
 
-`--review-input`, `--review-coverage-input` and `--review-output` select review files. `--output` changes the candidate CSV and derived report/checkpoint paths. See [reports and interpretation](reports.md).
+`--review-input`, `--review-coverage-input` and `--review-output` select review files. `--output` changes the candidate CSV and derived report/checkpoint paths. The quality command writes a separate aggregate-only CSV; use `--review-input` and `--quality-output` to select its input/output. See [reports and interpretation](reports.md).
 
 ## Birthplace gazetteer
 
