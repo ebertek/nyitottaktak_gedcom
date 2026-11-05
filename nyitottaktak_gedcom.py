@@ -33,7 +33,7 @@ from review_report import read_csv, review_files, write_review_report
 from research_shortlist import shortlist_files, write_shortlist_report
 from score_audit import audit_candidate_file, write_audit_report
 from consistency_audit import write_consistency_reports
-from collision_analysis import write_collision_reports
+from collision_analysis import summarize_selected_p5_conflicts, write_collision_reports
 from quality_report import write_quality_report
 from hungarian_places import PlaceResolver
 from scripts.build_place_index import ensure_default_index
@@ -1577,6 +1577,13 @@ def main() -> None:
                 "other_ambiguous_collision"
             )
         ) + f" -> {collision_triage}")
+        p5 = summarize_selected_p5_conflicts(candidates)
+        print(
+            "Selected P5 conflicts (non-exclusive): "
+            f"{p5['relatives']} relatives; "
+            f"birth_date={p5['birth_date']}, "
+            f"mother={p5['mother']}, birthplace={p5['birthplace']}"
+        )
         if categories:
             print("Chronology review flags: " + ", ".join(
                 f"{key}={categories[key]}" for key in sorted(categories)
