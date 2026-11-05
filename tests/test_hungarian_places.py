@@ -76,6 +76,86 @@ class GeoNamesImportTests(unittest.TestCase):
         self.assertTrue(resolver.equivalent("Mintafalu", "Sampleville"))
         self.assertFalse(resolver.equivalent("Example City", "Sampleville"))
 
+    def test_hu_native_place_without_hu_alternate_is_indexed(self):
+        # These fictional HU settlements have either no alternate names or
+        # only non-Hungarian alternate names. Both were previously dropped.
+        city = self.root / "HU.zip"
+        names = self.root / "HU-alternates.zip"
+        index = self.root / "index-hu.csv"
+        zip_text(city, "HU.txt", [
+            record("701", "Mintakövesd", "HU"),
+            record("702", "Próbaháza", "HU"),
+            record("703", "Not a Town", "HU", "A"),
+        ])
+        zip_text(names, "HU.txt", [
+            alternate("702", "Exampleville", lang="en"),
+            alternate("703", "Not a Town", lang="hu"),
+        ])
+        count, sources = build_index([(city, names)], index)
+        self.assertEqual((count, sources), (2, 1))
+        with index.open(encoding="utf-8-sig", newline="") as handle:
+            rows = {r["geonameid"]: r for r in csv.DictReader(handle)}
+        self.assertEqual(rows["701"]["hungarian"], "Mintakövesd")
+        self.assertEqual(rows["702"]["hungarian"], "Próbaháza")
+        resolver = PlaceResolver(index)
+        self.assertEqual(resolver.find("Mintakövesd").identifier,
+                         "geonames:701")
+        self.assertEqual(resolver.find("Próbaháza").identifier,
+                         "geonames:702")
+
+    def test_missing_hu_names_outside_hungary_are_not_invented(self):
+        city = self.root / "RS-missing.zip"
+        names = self.root / "RS-missing-alternates.zip"
+        index = self.root / "index-rs.csv"
+        zip_text(city, "RS.txt", [
+            record("801", "Examplegrad", "RS"),
+            record("802", "Samplegrad", "RS"),
+        ])
+        zip_text(names, "RS.txt", [
+            alternate("801", "Examplegrad", lang="en"),
+            alternate("802", "Mintaváros", lang="hu"),
+        ])
+        count, _ = build_index([(city, names)], index)
+        self.assertEqual(count, 1)
+        with index.open(encoding="utf-8-sig", newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(rows[0]["geonameid"], "802")
+        self.assertEqual(rows[0]["hungarian"], "Mintaváros")
+
+    def test_native_hu_names_remain_ambiguous_without_unique_identity(self):
+        city = self.root / "HU-collisions.zip"
+        names = self.root / "HU-collisions-alternates.zip"
+        index = self.root / "index-collisions.csv"
+        zip_text(city, "HU.txt", [
+            record("901", "Mintafalva", "HU"),
+            record("902", "Mintafalva", "HU"),
+        ])
+        zip_text(names, "HU.txt", [])
+        count, _ = build_index([(city, names)], index)
+        self.assertEqual(count, 2)
+        resolver = PlaceResolver(index)
+        self.assertIsNone(resolver.find("Mintafalva"))
+        self.assertEqual(
+            {entry.identifier for entry in resolver.candidates("Mintafalva")},
+            {"geonames:901", "geonames:902"},
+        )
+
+    def test_hu_place_with_existing_hu_name_preserves_preferred_alias(self):
+        city = self.root / "HU-preferred.zip"
+        names = self.root / "HU-preferred-alternates.zip"
+        index = self.root / "index-preferred.csv"
+        zip_text(city, "HU.txt", [
+            record("999", "Example Native", "HU"),
+        ])
+        zip_text(names, "HU.txt", [
+            alternate("999", "Próbafalu", lang="hu"),
+        ])
+        build_index([(city, names)], index)
+        resolver = PlaceResolver(index)
+        self.assertEqual(
+            resolver.preferred_hungarian("Example Native"), "Próbafalu"
+        )
+
     def test_ambiguous_native_names_require_country_context(self):
         city_a, alt_a = self.root / "RS.zip", self.root / "RS-alt.zip"
         city_b, alt_b = self.root / "HR.zip", self.root / "HR-alt.zip"
