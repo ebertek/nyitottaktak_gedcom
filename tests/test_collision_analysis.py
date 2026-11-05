@@ -17,6 +17,7 @@ from collision_analysis import (
     build_collision_summary,
     build_collision_triage,
     collision_profiles,
+    summarize_selected_p5_conflicts,
     write_collision_reports,
 )
 from research_shortlist import build_shortlist_rows
@@ -253,6 +254,18 @@ class P5ConflictTests(unittest.TestCase):
         self.assertEqual(rows[0]["p5_conflict_count"], "")
         self.assertEqual(rows[0]["candidate_birth_date_conflicts"], 1)
 
+    def test_selected_p5_aggregates_do_not_inherit_alternative_conflicts(self):
+        candidates = [
+            lead("I1", "p5-1", "6-os karton", "conflict_all"),
+            lead("I2", "p5-2", "6-os karton", "conflict_place"),
+            lead("I3", "valid", "6-os karton", "strong"),
+            lead("I3", "alt", "6-os karton", "conflict_birth"),
+        ]
+        expected = {
+            "relatives": 2, "birth_date": 1, "mother": 1, "birthplace": 2
+        }
+        self.assertEqual(summarize_selected_p5_conflicts(candidates), expected)
+
     def test_exact_name_and_year_match_without_two_others_is_not_p1(self):
         row = build_shortlist_rows([
             lead("I1", "partial", "Mágnesszalag", "partial"),
@@ -304,6 +317,7 @@ class OfflineCollisionCliTests(unittest.TestCase):
         )
         self.assertIn("Collision evidence:", output)
         self.assertIn("name_only_collision=1", output)
+        self.assertIn("Selected P5 conflicts (non-exclusive):", output)
         aggregate = self.source.with_suffix(".collision-summary.csv")
         private = self.source.with_suffix(".collision-triage.csv")
         self.assertTrue(aggregate.exists())
