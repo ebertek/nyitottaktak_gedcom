@@ -185,7 +185,16 @@ cython_debug/
 *.GED
 *.GEDCOM
 .nyitottaktak_cache/
-nyitottaktak_matches*.csv
-nyitottaktak_matches*.errors.txt
-*.checkpoint.json
-*.checkpoint.json.tmp
+
+# New default directory: matches, reviews, quality reports, checkpoints, backups.
+# Never commit generated results, including inferred married-name searches.
+results/
+
+# Protect legacy root-level outputs and arbitrary --output filenames.
+# These patterns are anchored to the repository root so future test fixtures
+# elsewhere in the repository can still be committed intentionally.
+/*.csv
+/*.errors.txt
+/*.checkpoint.json
+/*.checkpoint.json.tmp
+/*.pre-refresh-*.csv
