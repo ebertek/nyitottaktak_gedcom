@@ -7,7 +7,7 @@ import zipfile
 from pathlib import Path
 
 from hungarian_places import PlaceResolver
-from scripts.build_place_index import build_index, generate_rows
+from scripts.build_place_index import build_index, generate_rows, DEFAULT_COUNTRIES, COUNTRY_LABELS
 
 
 def record(geoid, name, country, feature="P"):
@@ -38,6 +38,11 @@ class GeoNamesImportTests(unittest.TestCase):
         self.temp = tempfile.TemporaryDirectory()
         self.addCleanup(self.temp.cleanup)
         self.root = Path(self.temp.name)
+
+    def test_historical_hungary_country_coverage(self):
+        selected = set(DEFAULT_COUNTRIES.split(","))
+        self.assertTrue({"HU", "RO", "SK", "RS", "UA", "HR", "AT", "SI"} <= selected)
+        self.assertIn("Vojvodina", COUNTRY_LABELS["RS"])
 
     def test_import_uses_geographic_ids_and_hungarian_labels(self):
         cities = self.root / "RS.zip"
