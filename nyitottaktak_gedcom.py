@@ -1296,6 +1296,46 @@ def rescore_csv(source: Path, target: Path, coverage: Path) -> tuple[int, int]:
     return len(rows), changed
 
 
+DEFAULT_OUTPUT = Path("results/nyitottaktak_matches.csv")
+LEGACY_DEFAULT_OUTPUT = Path("nyitottaktak_matches.csv")
+
+
+def choose_default_output(args: argparse.Namespace, argv: list[str]) -> None:
+    """Retain access to legacy local reports without moving user files.
+
+    The new directory is used for new scans. Offline modes can still read the
+    prior root-level default, if no results/ counterpart has been generated.
+    Explicit --output paths always win, even when they do not exist yet.
+    """
+    explicit_output = any(
+        arg == "--output" or arg.startswith("--output=") for arg in argv
+    )
+    if explicit_output or args.output != DEFAULT_OUTPUT:
+        return
+    if args.review_input is not None and (
+            args.review_only or args.rescore_only or args.quality_only):
+        return
+
+    offline_report = args.review_only or args.rescore_only or args.quality_only
+    coverage = args.coverage_only
+    legacy_exists = (LEGACY_DEFAULT_OUTPUT.exists() if offline_report else
+                     LEGACY_DEFAULT_OUTPUT.with_suffix(".checkpoint.json").exists())
+    modern_exists = (DEFAULT_OUTPUT.exists() if offline_report else
+                     DEFAULT_OUTPUT.with_suffix(".checkpoint.json").exists())
+    if (offline_report or coverage) and legacy_exists and not modern_exists:
+        args.output = LEGACY_DEFAULT_OUTPUT
+        print("Using legacy root-level results for this offline operation; "
+              "move them into results/ together when ready.")
+    elif args.execute and not (offline_report or coverage or args.check_updates):
+        legacy_checkpoint = LEGACY_DEFAULT_OUTPUT.with_suffix(".checkpoint.json")
+        modern_checkpoint = DEFAULT_OUTPUT.with_suffix(".checkpoint.json")
+        if legacy_checkpoint.exists() and not modern_checkpoint.exists():
+            print("NOTE: Existing root-level checkpoint found. New scans default "
+                  "to results/. To resume the old scan, supply "
+                  "--output nyitottaktak_matches.csv or move its results "
+                  "and checkpoint into results/ first.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("gedcom", nargs="?", type=Path, help="Local .ged/.gedcom file")
@@ -1328,7 +1368,9 @@ def main() -> None:
                              "add --include-undated separately if needed)")
     parser.add_argument("--delay", type=float, default=1.5, help="Minimum seconds between uncached requests")
     parser.add_argument("--min-score", type=int, default=35)
-    parser.add_argument("--output", type=Path, default=Path("nyitottaktak_matches.csv"))
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT,
+                        help="Candidate CSV (default: results/nyitottaktak_matches.csv; "
+                             "explicit paths are used as given)")
     parser.add_argument("--cache-dir", type=Path, default=Path(".nyitottaktak_cache"))
     parser.add_argument("--refresh", action="store_true", help="Refresh cached API responses")
     parser.add_argument("--place-index", type=Path, default=None,
@@ -1361,6 +1403,7 @@ def main() -> None:
                         help="Recheck completed people searched before the latest database update; "
                              "unknown-date checkpoints are also rechecked")
     args = parser.parse_args()
+    choose_default_output(args, sys.argv[1:])
     if args.all:
         args.max_people = 0
         args.max_requests = 0
