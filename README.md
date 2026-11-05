@@ -73,7 +73,23 @@ A scan checkpoints each processed relative. **Rerun the same search command to r
 
 ## Search behavior
 
-The script uses names, birth dates, birthplaces and mothers' names from GEDCOM records. It prefers recorded birth names, supports structured `GIVN`/`SURN` and explicit aliases, and simplifies district-level birthplaces (for example, `Budapest XI.` → `Budapest`). Historical city aliases such as `Subotica`/`Szabadka` are considered equivalent, and Hungarian accent variants are normalized for scoring. It does not invent married names.
+The script uses names, birth dates, birthplaces and mothers' names from GEDCOM records. It prefers birth names, supports structured `GIVN`/`SURN` and explicit aliases, and simplifies district-level birthplaces (e.g. `Budapest XI` → `Budapest`). Hungarian accent variants and verified historical names are normalized; the original text remains in reports. It does not invent married names.
+
+### Hungarian names for places
+
+Built-in mappings cover Szabadka/Subotica, Hódság/Odžaci, Péterréve/Bačko Petrovo Selo and Csák/Čakovci. To extend this across **all populated places with Hungarian names listed by GeoNames**, generate a local index once:
+
+```bash
+# Historical Hungary and neighboring countries (smaller download)
+python scripts/build_place_index.py --download
+
+# Or use the full worldwide GeoNames export (large download)
+python scripts/build_place_index.py --world --download
+```
+
+The index is saved to `.nyitottaktak_cache/hungarian_places.csv` and automatically used by searches and `--rescore-only`. Use `--place-index path/to/index.csv` to select another file. Building the index is the only operation that contacts GeoNames; scans otherwise contact only Nyitott Akták. Geographic IDs and country context prevent ambiguous names from being merged automatically.
+
+Source: [GeoNames downloadable data](https://www.geonames.org/export/) (CC BY 4.0). Its Hungarian-language names are extensive but **not a complete historical gazetteer**. Build a fresh index periodically as its data changes. If you change the index, re-score saved leads with `--rescore-only`; new API search terms require explicitly re-querying selected people (`--refresh`).
 
 Searches are sequential and cached. Defaults are **30 people**, **250 HTTP requests per invocation**, and **1.5 seconds** between uncached requests. `--all` removes the local people and request caps; `--max-people 0` or `--max-requests 0` removes them separately. The minimum delay is 0.5 seconds. Server limits such as HTTP 403/429 and `too_many` remain in effect.
 
