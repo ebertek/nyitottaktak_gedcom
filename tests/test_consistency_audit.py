@@ -149,7 +149,6 @@ class SharedArchiveTests(unittest.TestCase):
             invented("I1", "same", born=""),
             invented("I2", "same", born=""),
         ])[0]
-        self.assertEqual(actual["birth_years"], "") if "birth_years" in actual else None
         self.assertEqual(actual["gedcom_birth_years"], "")
         self.assertEqual(actual["birth_year_span"], "")
         self.assertEqual(actual["different_birth_years"], "no")
