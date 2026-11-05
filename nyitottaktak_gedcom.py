@@ -1638,9 +1638,16 @@ def main() -> None:
         shortlist_target = args.shortlist_output or target.with_suffix(".shortlist.csv")
         consistency_target = args.consistency_output or target.with_suffix(".consistency.csv")
         shared_target = args.shared_records_output or target.with_suffix(".shared-records.csv")
+        collision_summary = (
+            args.collision_summary_output or target.with_suffix(".collision-summary.csv")
+        )
+        collision_triage = (
+            args.collision_triage_output or target.with_suffix(".collision-triage.csv")
+        )
         protected = (
             source, target, coverage, review_target, shortlist_target,
-            consistency_target, shared_target, source.with_suffix(".checkpoint.json"),
+            consistency_target, shared_target, collision_summary, collision_triage,
+            source.with_suffix(".checkpoint.json"),
         )
         if len({p.resolve() for p in protected}) != len(protected):
             parser.error("Rescored output must not overwrite source, reports or checkpoint")
@@ -1651,8 +1658,12 @@ def main() -> None:
                 target, coverage, shortlist_target,
                 include_name_only=args.shortlist_include_name_only,
             )
+            rescored_rows = read_csv(target)
             flagged, shared, _ = write_consistency_reports(
-                read_csv(target), consistency_target, shared_target
+                rescored_rows, consistency_target, shared_target
+            )
+            collision_groups, collision_types = write_collision_reports(
+                rescored_rows, collision_summary, collision_triage
             )
         except ValueError as exc:
             parser.error(str(exc))
@@ -1661,6 +1672,9 @@ def main() -> None:
         print(f"Rescored research shortlist: {shortlist_count} relatives -> {shortlist_target}")
         print(f"Rescored consistency: {flagged} flagged rows; "
               f"{shared} shared GUIDs -> {consistency_target}, {shared_target}")
+        print(f"Rescored collision evidence: {collision_groups} source/class groups; "
+              f"{sum(collision_types.values())} shared GUIDs "
+              f"-> {collision_summary}, {collision_triage}")
         if priorities:
             print("Priorities: " + ", ".join(
                 f"{key}={priorities[key]}" for key in sorted(priorities)
