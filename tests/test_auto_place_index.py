@@ -74,11 +74,13 @@ class AutoPlaceIndexTests(unittest.TestCase):
                           side_effect=AssertionError("unexpected GeoNames download")), \
              patch.object(finder, "run") as run, \
              patch.object(finder, "rescore_csv", return_value=(1, 0)), \
-             patch.object(finder, "review_files", return_value=(1, {}, False)):
+             patch.object(finder, "review_files", return_value=(1, {}, False)), \
+             patch.object(finder, "shortlist_files", return_value=(0, {}, False)):
             self.invoke()
             self.invoke("--coverage-only")
             self.invoke("--rescore-only")
             self.invoke("--review-only")
+            self.invoke("--shortlist-only")
         self.assertEqual(run.call_count, 2)
         self.assertFalse((self.cache / "hungarian_places.csv").exists())
 
