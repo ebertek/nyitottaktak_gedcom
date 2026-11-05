@@ -29,9 +29,10 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
-from review_report import review_files, write_review_report
+from review_report import read_csv, review_files, write_review_report
 from research_shortlist import shortlist_files, write_shortlist_report
 from score_audit import audit_candidate_file, write_audit_report
+from consistency_audit import write_consistency_reports
 from quality_report import write_quality_report
 from hungarian_places import PlaceResolver
 from scripts.build_place_index import ensure_default_index
@@ -936,13 +937,18 @@ def run(args: argparse.Namespace) -> None:
     shortlist_path = (getattr(args, "shortlist_output", None) or
                       args.output.with_suffix(".shortlist.csv"))
     review_path = getattr(args, "review_output", None) or args.output.with_suffix(".review.csv")
+    consistency_path = (getattr(args, "consistency_output", None) or
+                        args.output.with_suffix(".consistency.csv"))
+    shared_path = (getattr(args, "shared_records_output", None) or
+                   args.output.with_suffix(".shared-records.csv"))
     protected_paths = (
         args.output, coverage_path, review_path,
         getattr(args, "checkpoint", None) or args.output.with_suffix(".checkpoint.json"),
+        shortlist_path, consistency_path, shared_path,
     )
-    if shortlist_path.resolve() in {path.resolve() for path in protected_paths}:
-        raise ValueError("Shortlist output must not overwrite candidates, coverage, "
-                         "review or checkpoint files")
+    if len({path.resolve() for path in protected_paths}) != len(protected_paths):
+        raise ValueError("Report outputs must not overwrite candidates, coverage, "
+                         "review, shortlist, consistency, shared GUID or checkpoint files")
     if args.coverage_only:
         checkpoint_path = args.checkpoint or args.output.with_suffix(".checkpoint.json")
         current = load_checkpoint(
@@ -1030,6 +1036,7 @@ def run(args: argparse.Namespace) -> None:
             candidate_rows, search_coverage,
             include_name_only=getattr(args, "shortlist_include_name_only", False),
         )
+        write_consistency_reports(candidate_rows, consistency_path, shared_path)
 
     for index, person in enumerate(eligible, 1):
         prior = completed.get(person.xref)
@@ -1364,12 +1371,14 @@ def choose_default_output(args: argparse.Namespace, argv: list[str]) -> None:
     if args.review_input is not None and (
             args.review_only or args.rescore_only or args.quality_only
             or getattr(args, "shortlist_only", False)
-            or getattr(args, "audit_only", False)):
+            or getattr(args, "audit_only", False)
+            or getattr(args, "consistency_only", False)):
         return
 
     offline_report = (args.review_only or args.rescore_only or
                       args.quality_only or getattr(args, "shortlist_only", False)
-                      or getattr(args, "audit_only", False))
+                      or getattr(args, "audit_only", False)
+                      or getattr(args, "consistency_only", False))
     coverage = args.coverage_only
     legacy_exists = (LEGACY_DEFAULT_OUTPUT.exists() if offline_report else
                      LEGACY_DEFAULT_OUTPUT.with_suffix(".checkpoint.json").exists())
@@ -1438,6 +1447,12 @@ def main() -> None:
                              "without changing source files")
     parser.add_argument("--audit-output", type=Path, default=None,
                         help="Private score-drift detail CSV (default: input CSV with .audit.csv suffix)")
+    parser.add_argument("--consistency-only", action="store_true",
+                        help="Audit historical chronology and shared archive GUIDs offline")
+    parser.add_argument("--consistency-output", type=Path, default=None,
+                        help="Private candidate consistency audit (default: *.consistency.csv)")
+    parser.add_argument("--shared-records-output", type=Path, default=None,
+                        help="Private shared GUID audit (default: *.shared-records.csv)")
     parser.add_argument("--quality-only", action="store_true",
                         help="Summarize archive field completeness and identity evidence "
                              "per source from saved candidates; offline and GEDCOM-free")
@@ -1484,7 +1499,7 @@ def main() -> None:
         elif (args.execute and not args.no_auto_place_index and
               not (args.check_updates or args.rescore_only or
                    args.review_only or args.coverage_only or args.quality_only
-                   or args.shortlist_only or args.audit_only)):
+                   or args.shortlist_only or args.audit_only or args.consistency_only)):
             # Only actual archive scans can download additional data. Preview
             # and offline/metadata-only commands preserve their no-GeoNames
             # network guarantees. Check inputs before starting a download.
