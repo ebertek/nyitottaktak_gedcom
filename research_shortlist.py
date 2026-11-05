@@ -76,10 +76,19 @@ FIELDS = [
     "chronology_review_candidate_count",
     "shared_archive_guid_candidate_count",
     "selected_archive_guid_shared_people",
+    "p5_conflict_birth_date",
+    "p5_conflict_mother",
+    "p5_conflict_birthplace",
+    "p5_conflict_count",
+    "candidate_birth_date_conflicts",
+    "candidate_mother_conflicts",
+    "candidate_birthplace_conflicts",
 ]
 
 
-def _next_step(evidence: str, missing: str, inferred: bool) -> str:
+def _next_step(
+        evidence: str, missing: str, inferred: bool,
+        conflicting_identifiers: str = "") -> str:
     if evidence == "strongly_corroborated":
         action = "Verify identity against the original document and independent sources"
     elif evidence == "partially_corroborated":
@@ -92,7 +101,17 @@ def _next_step(evidence: str, missing: str, inferred: bool) -> str:
     elif evidence == "insufficient_comparable_data":
         action = "Inspect source fields and historical date/name conventions before comparing"
     elif evidence == "conflicting_identity":
-        action = "Verify the contradictory identifier; do not presume this is the same person"
+        actions = {
+            "birth_date": "check birth dates against original records",
+            "mother": "verify the mother's recorded name",
+            "birthplace": "check historical birthplace names and locations",
+        }
+        conflicts = set(conflicting_identifiers.split(" | "))
+        focus = [description for identifier, description in actions.items()
+                 if identifier in conflicts]
+        action = ("Resolve identity disagreement: " + "; ".join(focus)
+                  if focus else "Verify the contradictory identifier")
+        action += "; do not presume this is the same person"
     else:
         action = "Defer until independent identifying information becomes available"
     if inferred:
@@ -128,6 +147,10 @@ def build_shortlist_rows(
         missing = missing_tree_identifiers(chosen)
         inferred = str(chosen.get("matched_name_origin") or "") == "inferred_married"
         priority, task = PRIORITY[classification]
+        selected_conflicts = {
+            field for field in assessment["conflicting_identifiers"].split(" | ")
+            if field
+        } if classification == "conflicting_identity" else set()
         row = {
             "research_priority": priority,
             "research_task": task,
@@ -140,7 +163,7 @@ def build_shortlist_rows(
             "missing_gedcom_for_selected_record": assessment["missing_gedcom_identifiers"],
             "next_research_step": _next_step(
                 classification, assessment["missing_gedcom_identifiers"] or missing,
-                inferred,
+                inferred, assessment["conflicting_identifiers"],
             ),
             "search_status": summary["search_status"],
             "search_warnings": summary["search_warnings"],
@@ -179,6 +202,21 @@ def build_shortlist_rows(
             "selected_archive_guid_shared_people": summary[
                 "best_evidence_archive_guid_shared_people"
             ],
+            "p5_conflict_birth_date": (
+                "yes" if "birth_date" in selected_conflicts else ""
+            ),
+            "p5_conflict_mother": (
+                "yes" if "mother" in selected_conflicts else ""
+            ),
+            "p5_conflict_birthplace": (
+                "yes" if "birthplace" in selected_conflicts else ""
+            ),
+            "p5_conflict_count": (
+                len(selected_conflicts) if classification == "conflicting_identity" else ""
+            ),
+            "candidate_birth_date_conflicts": summary["candidate_birth_date_conflicts"],
+            "candidate_mother_conflicts": summary["candidate_mother_conflicts"],
+            "candidate_birthplace_conflicts": summary["candidate_birthplace_conflicts"],
         }
         shortlist.append(row)
 
