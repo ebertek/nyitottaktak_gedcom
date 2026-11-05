@@ -49,9 +49,6 @@ ARCHIVE_FIELDS = (
 FULL_DATE = re.compile(r"\d{4}[-./]\d{1,2}[-./]\d{1,2}\.?")
 
 # Evidence is already a part of candidate CSVs produced by the main scorer.
-CORROBORATION = ("exact dob", "birth year matches", "birth years differ by 1",
-                 "mother exact", "mother partial", "birthplace exact",
-                 "birthplace partial")
 CONFLICT = ("dob conflict", "birth-year conflict", "mother name differs",
             "birthplace differs")
 
