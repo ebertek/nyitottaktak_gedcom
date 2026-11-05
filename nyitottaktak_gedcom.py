@@ -33,6 +33,7 @@ from review_report import read_csv, review_files, write_review_report
 from research_shortlist import shortlist_files, write_shortlist_report
 from score_audit import audit_candidate_file, write_audit_report
 from consistency_audit import write_consistency_reports
+from collision_analysis import write_collision_reports
 from quality_report import write_quality_report
 from hungarian_places import PlaceResolver
 from scripts.build_place_index import ensure_default_index
@@ -941,10 +942,15 @@ def run(args: argparse.Namespace) -> None:
                         args.output.with_suffix(".consistency.csv"))
     shared_path = (getattr(args, "shared_records_output", None) or
                    args.output.with_suffix(".shared-records.csv"))
+    collision_summary_path = (getattr(args, "collision_summary_output", None) or
+                              args.output.with_suffix(".collision-summary.csv"))
+    collision_triage_path = (getattr(args, "collision_triage_output", None) or
+                             args.output.with_suffix(".collision-triage.csv"))
     protected_paths = (
         args.output, coverage_path, review_path,
         getattr(args, "checkpoint", None) or args.output.with_suffix(".checkpoint.json"),
         shortlist_path, consistency_path, shared_path,
+        collision_summary_path, collision_triage_path,
     )
     if len({path.resolve() for path in protected_paths}) != len(protected_paths):
         raise ValueError("Report outputs must not overwrite candidates, coverage, "
@@ -1037,6 +1043,9 @@ def run(args: argparse.Namespace) -> None:
             include_name_only=getattr(args, "shortlist_include_name_only", False),
         )
         write_consistency_reports(candidate_rows, consistency_path, shared_path)
+        write_collision_reports(
+            candidate_rows, collision_summary_path, collision_triage_path
+        )
 
     for index, person in enumerate(eligible, 1):
         prior = completed.get(person.xref)
@@ -1453,6 +1462,10 @@ def main() -> None:
                         help="Private candidate consistency audit (default: *.consistency.csv)")
     parser.add_argument("--shared-records-output", type=Path, default=None,
                         help="Private shared GUID audit (default: *.shared-records.csv)")
+    parser.add_argument("--collision-summary-output", type=Path, default=None,
+                        help="Source/evidence collision aggregates (default: *.collision-summary.csv)")
+    parser.add_argument("--collision-triage-output", type=Path, default=None,
+                        help="Private shared-GUID evidence profiles (default: *.collision-triage.csv)")
     parser.add_argument("--quality-only", action="store_true",
                         help="Summarize archive field completeness and identity evidence "
                              "per source from saved candidates; offline and GEDCOM-free")
