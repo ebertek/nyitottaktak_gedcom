@@ -11,6 +11,7 @@ With the default `--output results/nyitottaktak_matches.csv`, these files are wr
 | `results/nyitottaktak_matches.csv` | One row per retained person–archive candidate, with matching fields, score, source type and document URL |
 | `results/nyitottaktak_matches.review.csv` | One row per GEDCOM person, with highest-score and best-evidence leads shown separately |
 | `results/nyitottaktak_matches.shortlist.csv` | Research queue: best evidence-based candidate per person, omitting name-only and no-lead cases by default |
+| `results/nyitottaktak_matches.audit.csv` | Offline score/evidence drift details for rows whose saved evidence differs from current scoring, or cannot be checked |
 | `results/nyitottaktak_matches.coverage.csv` | One row per selected person with search-completion status and warnings |
 | `results/nyitottaktak_matches.checkpoint.json` | Completed searches and their saved candidate rows, for safe resumption |
 | `results/nyitottaktak_matches.errors.txt` | Reported query errors/limitations, if any |
@@ -100,6 +101,27 @@ python nyitottaktak_gedcom.py --shortlist-only --shortlist-include-name-only
 
 For an alternate saved scan, use `--review-input results/married_name_matches.csv` with either option. Use `--shortlist-output PATH` to choose the destination. Existing input candidates and checkpoints are not modified; `--review-only` also regenerates its existing grouped review CSV. The shortlist is a **workflow queue, not an identity confidence probability** or a finding of involvement in state-security activities. Name-only and zero-lead relatives remain visible in the original candidate and grouped review reports.
 
+## Auditing outdated saved evidence
+
+Saved CSV candidate rows retain their **original** scores and scoring explanations until explicitly rescored. Changes to place aliases or matching rules can make those explanations stale; a misleading `birthplace differs` may still be present even when the current scorer recognizes two historical place names as equivalent.
+
+All offline `--review-only`, `--shortlist-only`, and `--quality-only` operations now compare each saved candidate row to the current scorer before reporting. If any numerical score, evidence text or resulting evidence class changes, they **print a warning before generating reports**; old source data is **never silently modified** and derived reports still reflect the supplied input. Scoring checks are performed against the saved matched GEDCOM name and identifying fields, without loading the private family tree or contacting the archive. Rows with missing or malformed fields are flagged as **unverifiable**, not incorrectly declared current.
+
+For a detailed private diff or a separate rescored data set:
+
+```bash
+# Read-only audit: summary in terminal; details in ignored *.audit.csv
+python nyitottaktak_gedcom.py --audit-only
+
+# Writes *.rescored.csv, *.rescored.review.csv and *.rescored.shortlist.csv;
+# original candidates, checkpoint and coverage remain unchanged.
+python nyitottaktak_gedcom.py --rescore-only
+```
+
+The audit CSV includes private GEDCOM and archive identifiers, before/after scores, evidence text and classifications; it only lists changed or unverifiable rows. **Never commit or share the detailed CSV.** An audit with no detected drift is a check of **saved scoring consistency only**—not archive completeness, not verification against the latest online archive, not confirmation that old filtered-out candidates can be recovered, and not proof of someone's historical role.
+
+If you are using another candidate set, pass `--review-input PATH`; optional `--audit-output PATH` chooses the audit destination. Rescoring an existing `*.rescored.csv` creates a *new*, more deeply suffixed result rather than overwriting the original input.
+
 ## Coverage is not archival completeness
 
 `*.coverage.csv` distinguishes:
@@ -149,7 +171,7 @@ After upgrading the matching rules or preparing an updated local place index, re
 python nyitottaktak_gedcom.py --rescore-only
 ```
 
-This creates `results/nyitottaktak_matches.rescored.csv` and `results/nyitottaktak_matches.rescored.review.csv`, leaving the original CSV, checkpoint and coverage untouched. The rescored candidate CSV includes previous score and score change.
+This creates `results/nyitottaktak_matches.rescored.csv`, `results/nyitottaktak_matches.rescored.review.csv`, and `results/nyitottaktak_matches.rescored.shortlist.csv`, leaving the original CSV, checkpoint and coverage untouched. The rescored candidate CSV includes previous score and score change.
 
 **Rescoring cannot find additional records**, repeat incomplete queries, or restore results originally excluded by the match-score threshold. A fresh archive search may be needed for new names, changed place filters or newly published records. See the [CLI guide](cli.md) for checkpoint and refresh options.
 

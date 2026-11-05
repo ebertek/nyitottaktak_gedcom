@@ -75,12 +75,22 @@ class AutoPlaceIndexTests(unittest.TestCase):
              patch.object(finder, "run") as run, \
              patch.object(finder, "rescore_csv", return_value=(1, 0)), \
              patch.object(finder, "review_files", return_value=(1, {}, False)), \
-             patch.object(finder, "shortlist_files", return_value=(0, {}, False)):
+             patch.object(finder, "shortlist_files", return_value=(0, {}, False)), \
+             patch.object(finder, "warn_about_saved_scoring"), \
+             patch.object(finder, "audit_candidate_file") as audit, \
+             patch.object(finder, "write_audit_report"):
+            audit.return_value.checked = 0
+            audit.return_value.score_changed = 0
+            audit.return_value.evidence_changed = 0
+            audit.return_value.classification_changed = 0
+            audit.return_value.unverifiable = 0
+
             self.invoke()
             self.invoke("--coverage-only")
             self.invoke("--rescore-only")
             self.invoke("--review-only")
             self.invoke("--shortlist-only")
+            self.invoke("--audit-only")
         self.assertEqual(run.call_count, 2)
         self.assertFalse((self.cache / "hungarian_places.csv").exists())
 

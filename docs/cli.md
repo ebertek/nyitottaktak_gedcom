@@ -87,7 +87,10 @@ Changing search-affecting settings, including inferred married names, may make a
 # Rebuild grouped identity review (no GEDCOM or network)
 python nyitottaktak_gedcom.py --review-only
 
-# Recalculate scores in a new CSV using existing candidate rows (offline)
+# Check old scores AND explanations against current matching rules
+python nyitottaktak_gedcom.py --audit-only
+
+# Recalculate saved candidates and rebuild the review/shortlist (offline)
 python nyitottaktak_gedcom.py --rescore-only
 
 # Summarize field availability and identity corroboration per archive source
@@ -101,7 +104,7 @@ python nyitottaktak_gedcom.py 'Family Tree.ged' \
   --all --exhaustive --coverage-only
 ```
 
-`--review-input`, `--review-coverage-input` and `--review-output` select review files. `--output` changes the candidate CSV and derived report/checkpoint paths. The quality command writes a separate aggregate-only CSV; use `--review-input` and `--quality-output` to select its input/output. Offline `--review-only` also creates `*.shortlist.csv` with one best-evidence lead per person (excluding name-only by default); `--shortlist-only` regenerates just that CSV, `--shortlist-include-name-only` includes deferred leads, and `--shortlist-output` selects a custom destination. See [reports and interpretation](reports.md).
+`--review-input`, `--review-coverage-input` and `--review-output` select review files. `--output` changes the candidate CSV and derived report/checkpoint paths. The quality command writes a separate aggregate-only CSV; use `--review-input` and `--quality-output` to select its input/output. `--audit-only` writes a private `*.audit.csv` containing only changed/unverifiable candidate rows; `--audit-output` selects its destination. **Every** `--review-only`, `--shortlist-only`, or `--quality-only` command now checks the saved evidence against the current score function, and warns about score changes, evidence-text changes, and altered evidence classes. These warnings do **not** rewrite original candidates or alter the derived classification: use `--rescore-only` when notified. This creates a separate `*.rescored.csv` and automatically rebuilds its grouped review **and prioritized shortlist** while preserving the original candidates, checkpoint, and coverage. `--shortlist-include-name-only` includes deferred leads; `--shortlist-output` selects a custom shortlist destination. For an alternate saved scan use `--review-input PATH`; for a rescored input use `--review-coverage-input` if the original coverage file should be reused. See [reports and interpretation](reports.md).
 
 ## Birthplace gazetteer
 
