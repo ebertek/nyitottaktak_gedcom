@@ -72,6 +72,10 @@ FIELDS = [
     "highest_identity_score",
     "highest_score_evidence_classification",
     "review_flags",
+    "selected_chronology_flags",
+    "chronology_review_candidate_count",
+    "shared_archive_guid_candidate_count",
+    "selected_archive_guid_shared_people",
 ]
 
 
@@ -165,6 +169,16 @@ def build_shortlist_rows(
             "highest_identity_score": summary["highest_identity_score"],
             "highest_score_evidence_classification": summary["top_evidence_classification"],
             "review_flags": summary["review_flags"],
+            "selected_chronology_flags": summary["best_evidence_chronology_flags"],
+            "chronology_review_candidate_count": summary[
+                "candidate_chronology_review_count"
+            ],
+            "shared_archive_guid_candidate_count": summary[
+                "candidate_shared_archive_guid_count"
+            ],
+            "selected_archive_guid_shared_people": summary[
+                "best_evidence_archive_guid_shared_people"
+            ],
         }
         shortlist.append(row)
 
