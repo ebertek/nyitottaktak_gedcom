@@ -21,7 +21,15 @@ from urllib.request import Request, urlopen
 
 
 BASE_URL = "https://download.geonames.org/export/dump"
-DEFAULT_COUNTRIES = "RS,HR,RO,SK,UA,SI,AT,HU"
+# Present-day countries spanning the former Kingdom of Hungary and its
+# surrounding Austro-Hungarian regions. Vojvodina is a province of Serbia (RS).
+# The import covers entire modern countries, not just historical boundaries.
+DEFAULT_COUNTRIES = "HU,RO,SK,RS,UA,HR,AT,SI"
+COUNTRY_LABELS = {
+    "HU": "Hungary", "RO": "Romania", "SK": "Slovakia",
+    "RS": "Serbia (including Vojvodina)", "UA": "Ukraine",
+    "HR": "Croatia", "AT": "Austria", "SI": "Slovenia",
+}
 COLUMNS = ["geonameid", "country", "native", "hungarian", "aliases"]
 
 
@@ -134,7 +142,7 @@ def build_index(sources: list[tuple[Path, Path]], output: Path) -> tuple[int, in
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--countries", default=DEFAULT_COUNTRIES,
-                        help="GeoNames country codes, comma-separated (default: RS,HR,RO,SK,UA,SI,AT,HU)")
+                        help=f"GeoNames country codes, comma-separated (default: {DEFAULT_COUNTRIES}; includes Vojvodina under RS)")
     parser.add_argument("--world", action="store_true",
                         help="Use worldwide GeoNames dumps instead (much larger download)")
     parser.add_argument("--download", action="store_true",
@@ -159,6 +167,10 @@ def main() -> None:
         if not countries or any(not re.fullmatch(r"[A-Z]{2}", code) for code in countries):
             parser.error("Provide comma-separated two-letter ISO country codes")
         countries = list(dict.fromkeys(countries))
+        print("Selected GeoNames countries: " + ", ".join(
+            f"{COUNTRY_LABELS.get(code, code)} ({code})" for code in countries
+        ))
+        print("Vojvodina is included in Serbia (RS); no separate country file exists.")
         urls = []
         for country in countries:
             pairs.append((
