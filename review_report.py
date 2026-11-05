@@ -36,6 +36,16 @@ FIELDS = [
     "top_archive_document_url",
     "review_flags",
     "review_order",
+    "top_evidence_classification",
+    "top_agreeing_identifiers",
+    "top_conflicting_identifiers",
+    "top_missing_gedcom_identifiers",
+    "candidate_strongly_corroborated",
+    "candidate_partially_corroborated",
+    "candidate_name_only",
+    "candidate_conflicting_identity",
+    "candidate_insufficient_gedcom_data",
+    "candidate_insufficient_comparable_data",
 ]
 
 # Order explicitly describes *identity checking effort*, not suspected conduct.
@@ -65,6 +75,107 @@ def _unique_guids(rows: list[dict]) -> int:
     unknown = sum(not row.get("archive_guid", "").strip() for row in rows)
     return len(known) + unknown
 
+
+
+# Exclusive classifications of candidate *identity evidence*, not historical
+# conduct or archive-document reliability. Keep score and review flags separate.
+EVIDENCE_CLASSES = (
+    "strongly_corroborated",
+    "partially_corroborated",
+    "name_only",
+    "conflicting_identity",
+    "insufficient_gedcom_data",
+    "insufficient_comparable_data",
+)
+
+# Phrases are emitted by the core score() function. Match complete semicolon
+# tokens to avoid confusing e.g. "mother unavailable" with "mother exact".
+EXACT_AGREEMENTS = {
+    "exact dob": ("birth_date", "exact"),
+    "mother exact": ("mother", "exact"),
+    "birthplace exact": ("birthplace", "exact"),
+}
+PARTIAL_AGREEMENTS = {
+    "birth year matches": ("birth_date", "year_only"),
+    "mother partial": ("mother", "partial"),
+    "birthplace partial": ("birthplace", "partial"),
+}
+CONTRADICTIONS = {
+    "dob conflict (year)": "birth_date",
+    "dob conflict (day/month)": "birth_date",
+    "birth-year conflict": "birth_date",
+    "mother name differs": "mother",
+    "birthplace differs": "birthplace",
+}
+IDENTIFIER_COLUMNS = (
+    ("birth_date", "gedcom_birth", "archive_birth"),
+    ("birthplace", "gedcom_birth_place", "archive_birth_place"),
+    ("mother", "gedcom_mother", "archive_mother"),
+)
+
+
+def classify_identity_evidence(row: dict) -> dict[str, str]:
+    """Conservative classification of one saved candidate, using scored evidence.
+
+    The archive and GEDCOM fields are used only to distinguish no archive
+    identifiers from GEDCOM omissions. Never infer an agreement from field
+    presence alone, nor mix evidence from different archive GUIDs.
+
+    A birth year differing by one is not counted as an independent agreement.
+    Two *exact* identifiers are required for strongly_corroborated; partial
+    evidence cannot promote a candidate to that tier.
+    """
+    parts = {
+        part.strip().casefold()
+        for part in str(row.get("evidence") or "").split(";")
+        if part.strip()
+    }
+    agreed = {
+        identifier: strength
+        for token, (identifier, strength) in (
+            list(EXACT_AGREEMENTS.items()) + list(PARTIAL_AGREEMENTS.items())
+        )
+        if token in parts
+    }
+    conflicts = {identifier for token, identifier in CONTRADICTIONS.items()
+                 if token in parts}
+    missing_gedcom = {
+        name for name, gedcom_field, archive_field in IDENTIFIER_COLUMNS
+        if str(row.get(archive_field) or "").strip()
+        and not str(row.get(gedcom_field) or "").strip()
+    }
+    archive_identifiers = any(
+        str(row.get(field) or "").strip() for _, _, field in IDENTIFIER_COLUMNS
+    )
+
+    if conflicts:
+        label = "conflicting_identity"
+    elif sum(strength == "exact" for strength in agreed.values()) >= 2:
+        label = "strongly_corroborated"
+    elif agreed:
+        label = "partially_corroborated"
+    elif not archive_identifiers:
+        label = "name_only"
+    elif missing_gedcom:
+        label = "insufficient_gedcom_data"
+    else:
+        # Non-empty fields are not automatically comparable (historical dates,
+        # unrecognized formats, missing/inconsistent evidence from legacy CSVs).
+        label = "insufficient_comparable_data"
+
+    return {
+        "classification": label,
+        "agreeing_identifiers": " | ".join(
+            f"{name}:{agreed[name]}" for name, _, _ in IDENTIFIER_COLUMNS
+            if name in agreed
+        ),
+        "conflicting_identifiers": " | ".join(
+            name for name, _, _ in IDENTIFIER_COLUMNS if name in conflicts
+        ),
+        "missing_gedcom_identifiers": " | ".join(
+            name for name, _, _ in IDENTIFIER_COLUMNS if name in missing_gedcom
+        ),
+    }
 
 def build_review_rows(candidates: list[dict], coverage: list[dict] | None = None) -> list[dict]:
     """Summarize best-scoring leads, contradictions and coverage per GEDCOM ID.
@@ -105,6 +216,12 @@ def build_review_rows(candidates: list[dict], coverage: list[dict] | None = None
             str(row.get("archive_name") or ""),
         ))
         top = ordered[0] if ordered else {}
+        # Classify each candidate separately. The top-class column describes
+        # only the same highest-scoring row as top_identity_evidence; the
+        # counters report alternatives without conflating archive identities.
+        assessments = [classify_identity_evidence(row) for row in ordered]
+        top_assessment = assessments[0] if assessments else {}
+        evidence_counts = Counter(a["classification"] for a in assessments)
         evidence = str(top.get("evidence") or "")
         found = evidence.casefold()
         flags = []
@@ -177,6 +294,14 @@ def build_review_rows(candidates: list[dict], coverage: list[dict] | None = None
             "top_archive_document_url": str(top.get("archive_document_url") or ""),
             "review_flags": " | ".join(flags),
             "review_order": group,
+            "top_evidence_classification": (
+                top_assessment.get("classification") or "no_candidate_leads"
+            ),
+            "top_agreeing_identifiers": top_assessment.get("agreeing_identifiers", ""),
+            "top_conflicting_identifiers": top_assessment.get("conflicting_identifiers", ""),
+            "top_missing_gedcom_identifiers": top_assessment.get("missing_gedcom_identifiers", ""),
+            **{f"candidate_{label}": evidence_counts[label]
+               for label in EVIDENCE_CLASSES},
         })
 
     summary.sort(key=lambda row: (

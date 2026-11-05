@@ -21,7 +21,37 @@ A custom `--output` sets the report path verbatim; for additional scans use `--o
 
 The candidate CSV includes names, dates, places, mother, archive GUID, record type, score, evidence and source links. If married-name inference is enabled, `matched_name_origin` and `searched_name_origin` identify whether a name came from GEDCOM or was inferred. Inferred names must be verified separately.
 
-The grouped review CSV summarizes the best-scoring identity lead for each selected person, candidate counts, distinct archive-record counts, record types, search status and flags. Examples of flags:
+The grouped review CSV summarizes the best-scoring identity lead for each selected person, candidate counts, distinct archive-record counts, record types, search status and flags.
+
+### Evidence-based review classifications
+
+`top_evidence_classification` labels only the **highest-scoring candidate** for each GEDCOM person, with a deliberately conservative interpretation:
+
+| Classification | Meaning |
+| --- | --- |
+| `strongly_corroborated` | Two or more **independent exact** identifiers agree (full date of birth, mother and/or birthplace), with no recorded contradictions |
+| `partially_corroborated` | At least one identifier agrees; or comparisons are partial (birth year only, partly matching mother/place) |
+| `name_only` | The archive record has no birth date, birthplace or mother's name; the matching name alone cannot establish identity |
+| `conflicting_identity` | At least one compared identity attribute contradicts the GEDCOM, even when other attributes agree |
+| `insufficient_gedcom_data` | The archive supplies identifiers missing from the GEDCOM, so no independent corroboration or contradiction can be established |
+| `insufficient_comparable_data` | Archive identifiers are present, but the existing scoring evidence does not establish agreement or contradiction (for example, an unrecognized date); a one-year birth difference alone is not considered corroboration |
+| `no_candidate_leads` | Coverage includes this person, but the saved candidate CSV contains no candidate row |
+
+`top_agreeing_identifiers`, `top_conflicting_identifiers` and `top_missing_gedcom_identifiers` list which *fields*, if any, support the classification. The six numeric `candidate_*` evidence columns count the classifications **across all candidate rows for that person**, so strong alternatives are not hidden by a different highest-scoring lead. These are candidate-row counts, not distinct archive records; their sum equals `candidate_count`.
+
+The classification uses the **existing saved `evidence` text**, not score thresholds or mere presence of fields. It does not rescore or modify candidate rows, search coverage or checkpoints. Existing `review_flags`, `review_order`, highest-score selection, and inferred-name provenance remain unchanged. Any disagreement takes precedence over positive identity indicators for that candidate; two partial matches do not become `strongly_corroborated`.
+
+**Even “strongly corroborated” does not establish historical activity, recruitment or cooperation.** A marriage-name inference is still hypothetical even if other identifiers agree. For older CSVs with missing/unrecognized evidence, the classifier falls back to an inconclusive category rather than fabricating an agreement.
+
+To regenerate the enriched report with no GEDCOM and no archive API requests:
+
+```bash
+python nyitottaktak_gedcom.py --review-only
+```
+
+For an alternate scan use `--review-input results/married_name_matches.csv`. If you want to retain a previous review report unchanged, pass `--review-output results/married_name_matches.evidence.review.csv`.
+
+Examples of flags:
 
 - `conflicting_identity_data`: the top-scoring lead has an identity-data conflict.
 - `multiple_identity_leads`: more than one candidate row needs investigation.
