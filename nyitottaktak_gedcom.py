@@ -1715,10 +1715,12 @@ def main() -> None:
         collision_triage = (
             args.collision_triage_output or target.with_suffix(".collision-triage.csv")
         )
+        place_detail = args.place_conflicts_output or target.with_suffix(".place-conflicts.csv")
+        place_summary = args.place_summary_output or target.with_suffix(".place-summary.csv")
         protected = (
             source, target, coverage, review_target, shortlist_target,
             consistency_target, shared_target, collision_summary, collision_triage,
-            source.with_suffix(".checkpoint.json"),
+            place_detail, place_summary, source.with_suffix(".checkpoint.json"),
         )
         if len({p.resolve() for p in protected}) != len(protected):
             parser.error("Rescored output must not overwrite source, reports or checkpoint")
@@ -1736,6 +1738,10 @@ def main() -> None:
             collision_groups, collision_types = write_collision_reports(
                 rescored_rows, collision_summary, collision_triage
             )
+            place_count, place_statuses = write_birthplace_reports(
+                rescored_rows, PLACE_RESOLVER, normalized_place_input,
+                place_detail, place_summary,
+            )
         except ValueError as exc:
             parser.error(str(exc))
         print(f"Offline rescoring: {count} candidate rows; {changed} scores changed -> {target}")
@@ -1746,6 +1752,8 @@ def main() -> None:
         print(f"Rescored collision evidence: {collision_groups} source/class groups; "
               f"{sum(collision_types.values())} shared GUIDs "
               f"-> {collision_summary}, {collision_triage}")
+        print(f"Rescored birthplace review: {place_count} selected P5 conflicts; "
+              f"see {place_detail}, {place_summary}")
         if priorities:
             print("Priorities: " + ", ".join(
                 f"{key}={priorities[key]}" for key in sorted(priorities)
