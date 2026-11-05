@@ -214,7 +214,8 @@ class CollisionProfilesTests(unittest.TestCase):
 class P5ConflictTests(unittest.TestCase):
     def test_combined_birth_date_mother_and_birthplace_conflicts(self):
         chosen = lead("I1", "bad", "6-os karton", "conflict_all")
-        extra = lead("I1", "other", "Mágnesszalag", "conflict_mother")
+        extra = lead("I1", "other", "Mágnesszalag", "conflict_all",
+                     score="30")
         rows = build_shortlist_rows([chosen, extra])
         self.assertEqual(len(rows), 1)
         r = rows[0]
@@ -226,9 +227,9 @@ class P5ConflictTests(unittest.TestCase):
         self.assertIn("birth dates", r["next_research_step"])
         self.assertIn("mother's recorded name", r["next_research_step"])
         self.assertIn("historical birthplace", r["next_research_step"])
-        self.assertEqual(r["candidate_birth_date_conflicts"], 1)
+        self.assertEqual(r["candidate_birth_date_conflicts"], 2)
         self.assertEqual(r["candidate_mother_conflicts"], 2)
-        self.assertEqual(r["candidate_birthplace_conflicts"], 1)
+        self.assertEqual(r["candidate_birthplace_conflicts"], 2)
         review = build_review_rows([chosen, extra])[0]
         self.assertEqual(review["candidate_mother_conflicts"], 2)
 
