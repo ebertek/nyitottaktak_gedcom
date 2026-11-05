@@ -98,6 +98,13 @@ class InferredMarriedNameTests(unittest.TestCase):
             ["Bükkösi Dávid", "Bukkosi David"],
         )
 
+    def test_birth_type_beats_earlier_untyped_name(self):
+        person = finder.Person("I90", names=[
+            ("Ágnes /Példai/", ""),
+            ("Ágnes /Fenyvesi/", "birth"),
+        ])
+        self.assertEqual(finder.birth_name_parts(person), ("Fenyvesi", "Ágnes"))
+
     def test_family_members_and_marriage_are_read(self):
         person = self.people["I1"]
         self.assertEqual(person.spouse_families, ["F1", "F2", "F3"])
