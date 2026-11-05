@@ -4,18 +4,18 @@ Search results are **identity leads**, not evidence that an individual was recru
 
 ## Generated files
 
-With the default `--output nyitottaktak_matches.csv`, these files are written in the working directory:
+With the default `--output results/nyitottaktak_matches.csv`, these files are written under the ignored `results/` directory:
 
 | File | Purpose |
 | --- | --- |
-| `nyitottaktak_matches.csv` | One row per retained person–archive candidate, with matching fields, score, source type and document URL |
-| `nyitottaktak_matches.review.csv` | One row per GEDCOM person for manual review, incorporating missing or conflicting identity evidence |
-| `nyitottaktak_matches.coverage.csv` | One row per selected person with search-completion status and warnings |
-| `nyitottaktak_matches.checkpoint.json` | Completed searches and their saved candidate rows, for safe resumption |
-| `nyitottaktak_matches.errors.txt` | Reported query errors/limitations, if any |
+| `results/nyitottaktak_matches.csv` | One row per retained person–archive candidate, with matching fields, score, source type and document URL |
+| `results/nyitottaktak_matches.review.csv` | One row per GEDCOM person for manual review, incorporating missing or conflicting identity evidence |
+| `results/nyitottaktak_matches.coverage.csv` | One row per selected person with search-completion status and warnings |
+| `results/nyitottaktak_matches.checkpoint.json` | Completed searches and their saved candidate rows, for safe resumption |
+| `results/nyitottaktak_matches.errors.txt` | Reported query errors/limitations, if any |
 | `.nyitottaktak_cache/` | Cached API results, observed archive-update metadata, and the optional GeoNames place index |
 
-A custom `--output` changes the corresponding filename prefix. Generated reports contain private names and potentially sensitive family relationships: **keep them out of public repositories**.
+A custom `--output` sets the report path verbatim; for additional scans use `--output results/married_name_matches.csv`. Old files are **not** moved automatically. [Migration and resume instructions](cli.md#result-files-and-migrating-previous-scans) explain how to relocate a whole checkpoint/report set. Generated reports contain private names and potentially sensitive family relationships: **keep them out of public repositories**.
 
 ## Candidate and grouped review reports
 
@@ -66,10 +66,10 @@ python nyitottaktak_gedcom.py --quality-only
 
 # Analyze an alternate candidate CSV without touching the original
 python nyitottaktak_gedcom.py --quality-only \
-  --review-input married_name_matches.csv
+  --review-input results/married_name_matches.csv
 ```
 
-The command needs no GEDCOM, network access or API cache. It writes `nyitottaktak_matches.quality.csv` by default (or `--quality-output PATH`) with **aggregate counts only**; it never writes people's names, GEDCOM IDs or archive GUIDs.
+The command needs no GEDCOM, network access or API cache. It writes `results/nyitottaktak_matches.quality.csv` by default (or `--quality-output PATH`) with **aggregate counts only**; it never writes people's names, GEDCOM IDs or archive GUIDs.
 
 The report groups by `archive_record_type` and includes a total across the retained sample:
 
@@ -87,7 +87,7 @@ After upgrading the matching rules or preparing an updated local place index, re
 python nyitottaktak_gedcom.py --rescore-only
 ```
 
-This creates `nyitottaktak_matches.rescored.csv` and `nyitottaktak_matches.rescored.review.csv`, leaving the original CSV, checkpoint and coverage untouched. The rescored candidate CSV includes previous score and score change.
+This creates `results/nyitottaktak_matches.rescored.csv` and `results/nyitottaktak_matches.rescored.review.csv`, leaving the original CSV, checkpoint and coverage untouched. The rescored candidate CSV includes previous score and score change.
 
 **Rescoring cannot find additional records**, repeat incomplete queries, or restore results originally excluded by the match-score threshold. A fresh archive search may be needed for new names, changed place filters or newly published records. See the [CLI guide](cli.md) for checkpoint and refresh options.
 
