@@ -1774,9 +1774,11 @@ def main() -> None:
         collision_triage = (
             args.collision_triage_output or source.with_suffix(".collision-triage.csv")
         )
+        place_detail = args.place_conflicts_output or source.with_suffix(".place-conflicts.csv")
+        place_summary = args.place_summary_output or source.with_suffix(".place-summary.csv")
         protected = (
             source, coverage, target, consistency_target, shared_target,
-            collision_summary, collision_triage,
+            collision_summary, collision_triage, place_detail, place_summary,
             source.with_suffix(".review.csv"), source.with_suffix(".checkpoint.json"),
         )
         if len({p.resolve() for p in protected}) != len(protected):
@@ -1796,12 +1798,18 @@ def main() -> None:
         collision_groups, collision_types = write_collision_reports(
             candidate_rows, collision_summary, collision_triage
         )
+        place_count, _ = write_birthplace_reports(
+            candidate_rows, PLACE_RESOLVER, normalized_place_input,
+            place_detail, place_summary,
+        )
         print(f"Offline research shortlist: {count} relatives -> {target}")
         print(f"Consistency audit: {flagged} flagged rows; {shared} shared GUIDs "
               f"-> {consistency_target}, {shared_target}")
         print(f"Collision evidence: {collision_groups} source/class groups; "
               f"{sum(collision_types.values())} shared GUIDs "
               f"-> {collision_summary}, {collision_triage}")
+        print(f"Birthplace reconciliation: {place_count} selected P5 conflicts "
+              f"-> {place_detail}, {place_summary}")
         print("Priorities: " + ", ".join(
             f"{key}={priorities[key]}" for key in sorted(priorities)
         ) if priorities else "Priorities: no actionable leads")
