@@ -1526,6 +1526,35 @@ def main() -> None:
         except ValueError as exc:
             parser.error(str(exc))
         return
+    if args.consistency_only:
+        source = args.review_input or args.output
+        coverage = args.review_coverage_input or source.with_suffix(".coverage.csv")
+        consistency_path = args.consistency_output or source.with_suffix(".consistency.csv")
+        shared_path = args.shared_records_output or source.with_suffix(".shared-records.csv")
+        protected = (
+            source, coverage, source.with_suffix(".review.csv"),
+            source.with_suffix(".shortlist.csv"), source.with_suffix(".checkpoint.json"),
+            source.with_suffix(".audit.csv"), source.with_suffix(".quality.csv"),
+            consistency_path, shared_path,
+        )
+        if len({p.resolve() for p in protected}) != len(protected):
+            parser.error("Consistency output would overwrite a source or existing report")
+        try:
+            candidates = read_csv(source)
+            flagged, shared, categories = write_consistency_reports(
+                candidates, consistency_path, shared_path
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(f"Offline consistency audit: {flagged} flagged candidate rows; "
+              f"{shared} shared archive GUIDs -> {consistency_path}, {shared_path}")
+        if categories:
+            print("Chronology review flags: " + ", ".join(
+                f"{key}={categories[key]}" for key in sorted(categories)
+            ))
+        print("NOTE: Historical age flags are research prompts, not proof of impossible identities.")
+        print("NOTE: These reports contain private family identifiers; do not commit or share.")
+        return
     if args.audit_only:
         source = args.review_input or args.output
         target = args.audit_output or source.with_suffix(".audit.csv")
@@ -1578,11 +1607,14 @@ def main() -> None:
         target = source.with_name(source.stem + ".rescored" + source.suffix)
         review_target = target.with_suffix(".review.csv")
         shortlist_target = args.shortlist_output or target.with_suffix(".shortlist.csv")
-        if shortlist_target.resolve() in {p.resolve() for p in (
-                source, target, coverage, review_target,
-                source.with_suffix(".checkpoint.json"))}:
-            parser.error("Rescored shortlist output must not overwrite source, "
-                         "candidate, coverage, review or checkpoint files")
+        consistency_target = args.consistency_output or target.with_suffix(".consistency.csv")
+        shared_target = args.shared_records_output or target.with_suffix(".shared-records.csv")
+        protected = (
+            source, target, coverage, review_target, shortlist_target,
+            consistency_target, shared_target, source.with_suffix(".checkpoint.json"),
+        )
+        if len({p.resolve() for p in protected}) != len(protected):
+            parser.error("Rescored output must not overwrite source, reports or checkpoint")
         try:
             count, changed = rescore_csv(source, target, coverage)
             people, _, has_coverage = review_files(target, coverage, review_target)
@@ -1590,11 +1622,16 @@ def main() -> None:
                 target, coverage, shortlist_target,
                 include_name_only=args.shortlist_include_name_only,
             )
+            flagged, shared, _ = write_consistency_reports(
+                read_csv(target), consistency_target, shared_target
+            )
         except ValueError as exc:
             parser.error(str(exc))
         print(f"Offline rescoring: {count} candidate rows; {changed} scores changed -> {target}")
         print(f"Identity review: {people} relatives -> {review_target}")
         print(f"Rescored research shortlist: {shortlist_count} relatives -> {shortlist_target}")
+        print(f"Rescored consistency: {flagged} flagged rows; "
+              f"{shared} shared GUIDs -> {consistency_target}, {shared_target}")
         if priorities:
             print("Priorities: " + ", ".join(
                 f"{key}={priorities[key]}" for key in sorted(priorities)
@@ -1607,6 +1644,14 @@ def main() -> None:
         source = args.review_input or args.output
         coverage = args.review_coverage_input or source.with_suffix(".coverage.csv")
         target = args.shortlist_output or source.with_suffix(".shortlist.csv")
+        consistency_target = args.consistency_output or source.with_suffix(".consistency.csv")
+        shared_target = args.shared_records_output or source.with_suffix(".shared-records.csv")
+        protected = (
+            source, coverage, target, consistency_target, shared_target,
+            source.with_suffix(".review.csv"), source.with_suffix(".checkpoint.json"),
+        )
+        if len({p.resolve() for p in protected}) != len(protected):
+            parser.error("Shortlist/consistency outputs must not overwrite source or reports")
         try:
             warn_about_saved_scoring(source)
             count, priorities, has_coverage = shortlist_files(
@@ -1615,7 +1660,12 @@ def main() -> None:
             )
         except ValueError as exc:
             parser.error(str(exc))
+        flagged, shared, _ = write_consistency_reports(
+            read_csv(source), consistency_target, shared_target
+        )
         print(f"Offline research shortlist: {count} relatives -> {target}")
+        print(f"Consistency audit: {flagged} flagged rows; {shared} shared GUIDs "
+              f"-> {consistency_target}, {shared_target}")
         print("Priorities: " + ", ".join(
             f"{key}={priorities[key]}" for key in sorted(priorities)
         ) if priorities else "Priorities: no actionable leads")
@@ -1628,10 +1678,14 @@ def main() -> None:
         coverage = args.review_coverage_input or source.with_suffix(".coverage.csv")
         target = args.review_output or source.with_suffix(".review.csv")
         shortlist_target = args.shortlist_output or source.with_suffix(".shortlist.csv")
-        if shortlist_target.resolve() in {p.resolve() for p in (
-                source, coverage, target)}:
-            parser.error("Shortlist output must not overwrite candidate, "
-                         "coverage or review CSV")
+        consistency_target = args.consistency_output or source.with_suffix(".consistency.csv")
+        shared_target = args.shared_records_output or source.with_suffix(".shared-records.csv")
+        protected = (
+            source, coverage, target, shortlist_target, consistency_target,
+            shared_target, source.with_suffix(".checkpoint.json"),
+        )
+        if len({p.resolve() for p in protected}) != len(protected):
+            parser.error("Review outputs must not overwrite source, reports or checkpoint")
         try:
             warn_about_saved_scoring(source)
             people, counts, has_coverage = review_files(source, coverage, target)
@@ -1647,6 +1701,11 @@ def main() -> None:
         except ValueError as exc:
             parser.error(str(exc))
         print(f"Offline research shortlist: {shortlist_count} relatives -> {shortlist_target}")
+        flagged, shared, _ = write_consistency_reports(
+            read_csv(source), consistency_target, shared_target
+        )
+        print(f"Consistency audit: {flagged} flagged rows; {shared} shared GUIDs "
+              f"-> {consistency_target}, {shared_target}")
         if priorities:
             print("Priorities: " + ", ".join(
                 f"{key}={priorities[key]}" for key in sorted(priorities)
