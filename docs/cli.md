@@ -39,16 +39,41 @@ An explicit GEDCOM marriage (`HUSB`, `WIFE`, `MARR`) can generate **speculative*
 ```bash
 python nyitottaktak_gedcom.py 'Family Tree.ged' \
   --execute --all --exhaustive --include-inferred-married-names \
-  --output married_name_matches.csv --delay 2
+  --output results/married_name_matches.csv --delay 2
 ```
 
 Use a **different `--output`** (hence a different checkpoint) when enabling this option: it changes which searches must be performed. The script labels inferred-name leads in results. See [name matching](matching.md).
+
+## Result files and migrating previous scans
+
+New scans save all derived files under the ignored **`results/`** directory by default:
+
+```text
+results/
+  nyitottaktak_matches.csv
+  nyitottaktak_matches.review.csv
+  nyitottaktak_matches.coverage.csv
+  nyitottaktak_matches.checkpoint.json
+```
+
+Custom `--output` paths are used **exactly as provided**. To keep another scan organized, specify `--output results/married_name_matches.csv`. Root-level CSVs and checkpoint files are also ignored for backward compatibility.
+
+**Existing files are not moved automatically.** To migrate a previous scan, stop any running scan, ensure no destination files conflict, and move its candidate CSV **together with** its same-prefix checkpoint, review, coverage, error and backup files. For example, on Linux:
+
+```bash
+mkdir -p results
+# Run the commands only for existing prefixes; answer overwrite prompts carefully.
+mv -i -- nyitottaktak_matches* results/
+mv -i -- married_name_matches* results/
+```
+
+After moving, resume using the corresponding `--output results/FILE.csv`; otherwise an old custom path will still write in the root. When no new default report exists, offline review, quality, rescore and coverage commands automatically recognize the old root-level default. New executed scans deliberately use `results/` rather than silently resuming or moving old checkpoints, and print a migration notice when appropriate.
 
 ## Resume and refresh
 
 A completed person's queries are recorded in the `*.checkpoint.json` next to the output CSV.
 
-- **Resume:** rerun with the same GEDCOM, settings, output and checkpoint. Completed people are skipped.
+- **Resume:** rerun with the same GEDCOM, settings, output and checkpoint. Completed people are skipped. After moving files, use their new `results/` path.
 - **Check source freshness:** `python nyitottaktak_gedcom.py --check-updates`.
 - **Revisit stale/unknown-date results:** run with `--execute --all --exhaustive --refresh-stale` and the same search settings.
 - **Force new API searches:** use `--refresh`. Before re-querying completed people, the script preserves a dated backup of the candidate CSV.
