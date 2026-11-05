@@ -932,6 +932,16 @@ def run(args: argparse.Namespace) -> None:
     if args.max_people:
         eligible = eligible[:args.max_people]
     coverage_path = args.coverage_output or args.output.with_suffix(".coverage.csv")
+    shortlist_path = (getattr(args, "shortlist_output", None) or
+                      args.output.with_suffix(".shortlist.csv"))
+    review_path = getattr(args, "review_output", None) or args.output.with_suffix(".review.csv")
+    protected_paths = (
+        args.output, coverage_path, review_path,
+        getattr(args, "checkpoint", None) or args.output.with_suffix(".checkpoint.json"),
+    )
+    if shortlist_path.resolve() in {path.resolve() for path in protected_paths}:
+        raise ValueError("Shortlist output must not overwrite candidates, coverage, "
+                         "review or checkpoint files")
     if args.coverage_only:
         checkpoint_path = args.checkpoint or args.output.with_suffix(".checkpoint.json")
         current = load_checkpoint(
@@ -1009,15 +1019,13 @@ def run(args: argparse.Namespace) -> None:
         })
         write_report(args.output, columns, completed)
         write_coverage_report(coverage_path, eligible, completed)
-        review_path = getattr(args, "review_output", None) or args.output.with_suffix(".review.csv")
         candidate_rows = [
             row for entry in completed.values() for row in entry.get("rows", [])
         ]
         search_coverage = coverage_rows(eligible, completed)
         write_review_report(review_path, candidate_rows, search_coverage)
         write_shortlist_report(
-            getattr(args, "shortlist_output", None) or
-            args.output.with_suffix(".shortlist.csv"),
+            shortlist_path,
             candidate_rows, search_coverage,
             include_name_only=getattr(args, "shortlist_include_name_only", False),
         )
@@ -1520,13 +1528,17 @@ def main() -> None:
         source = args.review_input or args.output
         coverage = args.review_coverage_input or source.with_suffix(".coverage.csv")
         target = args.review_output or source.with_suffix(".review.csv")
+        shortlist_target = args.shortlist_output or source.with_suffix(".shortlist.csv")
+        if shortlist_target.resolve() in {p.resolve() for p in (
+                source, coverage, target)}:
+            parser.error("Shortlist output must not overwrite candidate, "
+                         "coverage or review CSV")
         try:
             people, counts, has_coverage = review_files(source, coverage, target)
         except ValueError as exc:
             parser.error(str(exc))
         print(f"Offline identity review: {people} relatives, "
               f"{sum(counts.values())} grouped rows -> {target}")
-        shortlist_target = args.shortlist_output or source.with_suffix(".shortlist.csv")
         try:
             shortlist_count, priorities, _ = shortlist_files(
                 source, coverage, shortlist_target,
