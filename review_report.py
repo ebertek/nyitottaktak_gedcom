@@ -30,6 +30,8 @@ FIELDS = [
     "top_archive_birth_place",
     "top_archive_mother",
     "top_archive_record_type",
+    "top_matched_name_origin",
+    "top_searched_name_origin",
     "top_identity_evidence",
     "top_archive_document_url",
     "review_flags",
@@ -43,6 +45,7 @@ REVIEW_ORDER = {
     "incomplete_search": 2,
     "multiple_identity_leads": 3,
     "needs_additional_identifiers": 4,
+    "inferred_married_name": 4,
     "identity_lead_to_review": 5,
     "no_candidate_leads": 6,
 }
@@ -132,6 +135,11 @@ def build_review_rows(candidates: list[dict], coverage: list[dict] | None = None
         ):
             flags.append("needs_additional_identifiers")
 
+        if top.get("matched_name_origin") == "inferred_married":
+            # A search-generated name may be historically plausible but is not
+            # documented as a legal/used name in the GEDCOM.
+            flags.append("inferred_married_name")
+
         if not ordered:
             flags.append("no_candidate_leads")
         elif not flags:
@@ -163,6 +171,8 @@ def build_review_rows(candidates: list[dict], coverage: list[dict] | None = None
             "top_archive_birth_place": str(top.get("archive_birth_place") or ""),
             "top_archive_mother": str(top.get("archive_mother") or ""),
             "top_archive_record_type": str(top.get("archive_record_type") or ""),
+            "top_matched_name_origin": str(top.get("matched_name_origin") or ""),
+            "top_searched_name_origin": str(top.get("searched_name_origin") or ""),
             "top_identity_evidence": evidence,
             "top_archive_document_url": str(top.get("archive_document_url") or ""),
             "review_flags": " | ".join(flags),

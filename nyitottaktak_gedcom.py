@@ -58,12 +58,15 @@ class Person:
     born: str = ""
     birthplace: str = ""
     childhood_families: list[str] = field(default_factory=list)
+    spouse_families: list[str] = field(default_factory=list)
 
 
 @dataclass
 class Family:
+    husband: str = ""
     wife: str = ""
     children: list[str] = field(default_factory=list)
+    marriage_recorded: bool = False
 
 
 def read_gedcom(path: Path) -> tuple[dict[str, Person], dict[str, Family]]:
@@ -113,6 +116,8 @@ def read_gedcom(path: Path) -> tuple[dict[str, Person], dict[str, Family]]:
                     name_index = len(p.names) - 1
                 elif tag == "FAMC" and value.startswith("@"):
                     p.childhood_families.append(value.strip("@"))
+                elif tag == "FAMS" and value.startswith("@"):
+                    p.spouse_families.append(value.strip("@"))
                 elif tag in ("_AKA", "_MARNM") and value:
                     p.names.append((value, tag))
                 else:
@@ -131,16 +136,23 @@ def read_gedcom(path: Path) -> tuple[dict[str, Person], dict[str, Family]]:
                         p.structured_names.setdefault(name_index, {})[tag] = value
         elif kind == "FAM" and level == 1:
             f = families[owner]
-            if tag == "WIFE":
+            if tag == "HUSB":
+                f.husband = value.strip("@")
+            elif tag == "WIFE":
                 f.wife = value.strip("@")
             elif tag == "CHIL":
                 f.children.append(value.strip("@"))
+            elif tag == "MARR" and value.upper() != "N":
+                f.marriage_recorded = True
 
-    # Some GEDCOM exports identify parent families only through FAM/CHIL.
+    # Some GEDCOM exports identify relationships only through FAM members.
     for fid, f in families.items():
         for child in f.children:
             if child in people and fid not in people[child].childhood_families:
                 people[child].childhood_families.append(fid)
+        for partner in (f.husband, f.wife):
+            if partner in people and fid not in people[partner].spouse_families:
+                people[partner].spouse_families.append(fid)
     return people, families
 
 
@@ -178,7 +190,7 @@ def has_gedcom_surname(raw: str) -> bool:
                for surname in surnames)
 
 
-def candidate_names(person: Person) -> list[str]:
+def candidate_names(person: Person, birth_only: bool = False) -> list[str]:
     # GEDCOM's birth NAME is already the maiden name for women: use it directly.
     # Prefer birth/primary names; search explicitly recorded married/alias names
     # as alternatives, without guessing a surname from the spouse.
@@ -187,6 +199,8 @@ def candidate_names(person: Person) -> list[str]:
                           key=lambda n: (n[1][1] not in ("birth", ""), n[1][1] == "married"))
     names: list[str] = []
     for index, (raw, _type) in sorted_names:
+        if birth_only and _type not in ("", "birth", "maiden"):
+            continue
         if has_gedcom_surname(raw):
             candidate = human_name(raw)
         else:
@@ -203,13 +217,93 @@ def candidate_names(person: Person) -> list[str]:
     return names
 
 
-def mother_names(person: Person, people: dict[str, Person], families: dict[str, Family]) -> list[str]:
+def birth_name_parts(person: Person) -> tuple[str, str] | None:
+    """Surname and given names from the first documented birth/primary name.
+
+    Never borrow the surname or given names from a married NAME to manufacture
+    another legal identity. Prefer structured GEDCOM fields when available.
+    """
+    indexed = sorted(
+        enumerate(person.names),
+        key=lambda item: (
+            item[1][1] not in ("birth", "maiden"),
+            item[1][1] not in ("birth", "maiden", ""),
+            item[0],
+        ),
+    )
+    for index, (raw, name_type) in indexed:
+        if name_type not in ("birth", "maiden", ""):
+            continue
+        parts = person.structured_names.get(index, {})
+        match = re.search(r"/([^/]+)/", raw)
+        surname = (parts.get("SURN") or (match.group(1) if match else "")).strip(" /")
+        given = (parts.get("GIVN") or re.sub(r"/[^/]+/", " ", raw)).strip()
+        if (not norm(surname) or norm(surname) in MISSING_SURNAMES or
+                not norm(given)):
+            continue
+        return surname, given
+    return None
+
+
+def inferred_married_names(
+        person: Person, people: dict[str, Person], families: dict[str, Family]) -> list[str]:
+    """Generate unverified Hungarian forms only for explicit recorded marriages.
+
+    This is a search heuristic. A marriage record does not establish which
+    name form either spouse actually used, and no generated form is added to
+    the GEDCOM or used as a mother's birth name.
+    """
+    original = birth_name_parts(person)
+    if not original:
+        return []
+    birth_surname, given = original
+    documented = {norm(name) for name in candidate_names(person)}
+    variants: list[str] = []
+    seen = set(documented)
+
+    for family_id in person.spouse_families:
+        family = families.get(family_id)
+        if (not family or family.wife != person.xref or
+                not family.husband or not family.marriage_recorded):
+            continue
+        husband = people.get(family.husband)
+        husband_name = birth_name_parts(husband) if husband else None
+        if not husband_name:
+            continue
+        spouse_surname, spouse_given = husband_name
+        if norm(spouse_surname) in MISSING_SURNAMES:
+            continue
+        first_given = given.split()[0]
+        forms = [
+            f"{spouse_surname} {spouse_given}né",
+            f"{spouse_surname}né {birth_surname} {given}",
+            f"{spouse_surname} {given}",
+            f"{spouse_surname} {spouse_given}né {birth_surname} {given}",
+        ]
+        # Archive search has a strict 25-character limit. A shorter form
+        # using the first given name can be searched without silently
+        # truncating a surname or a -né marker.
+        if first_given != given:
+            forms.extend([
+                f"{spouse_surname}né {birth_surname} {first_given}",
+                f"{spouse_surname} {first_given}",
+                f"{spouse_surname} {spouse_given}né {birth_surname} {first_given}",
+            ])
+        for form in forms:
+            if norm(form) not in seen:
+                seen.add(norm(form))
+                variants.append(form)
+    return variants
+
+
+def mother_names(person: Person, people: dict[str, Person], families: dict[str, Family],
+                 birth_only: bool = False) -> list[str]:
     mothers: list[str] = []
     for family_id in person.childhood_families:
         mother_id = families.get(family_id, Family()).wife
         mother = people.get(mother_id)
         if mother:
-            for name in candidate_names(mother):
+            for name in candidate_names(mother, birth_only=birth_only):
                 if name not in mothers:
                     mothers.append(name)
     return mothers
@@ -608,12 +702,18 @@ CHECKPOINT_VERSION = 1
 
 def checkpoint_config(args: argparse.Namespace) -> dict:
     """Only search/scoring options belong here, not per-run budgets or scope."""
-    return {
+    config = {
         "exhaustive": args.exhaustive,
         "year_tolerance": args.year_tolerance,
         "api_year_ceiling": args.api_year_ceiling,
         "min_score": args.min_score,
     }
+    # Keep existing checkpoints valid for the unchanged default behavior.
+    # Turning on inferred names changes query coverage and needs a separate
+    # checkpoint rather than silently skipping previously completed people.
+    if getattr(args, "include_inferred_married_names", False):
+        config["inferred_married_names"] = True
+    return config
 
 
 def load_checkpoint(path: Path, gedcom_digest: str, config: dict) -> dict:
@@ -824,13 +924,19 @@ def run(args: argparse.Namespace) -> None:
     if not args.execute:
         print("PREVIEW ONLY. Add --execute to query the site. First eligible people:")
         for person in eligible[:20]:
-            mom = ", ".join(mother_names(person, people, families)) or "unknown"
+            mom = ", ".join(mother_names(
+                person, people, families,
+                birth_only=getattr(args, "include_inferred_married_names", False))) or "unknown"
             original_place = first_place(person.birthplace)
             search_place = api_place(person.birthplace)
             place_label = original_place or "?"
             if search_place and search_place != original_place:
                 place_label += f" -> search: {search_place}"
             print(f"  {person.xref}: {', '.join(candidate_names(person))} | {person.born or '?'} | {place_label} | mother: {mom}")
+            if getattr(args, "include_inferred_married_names", False):
+                variants = inferred_married_names(person, people, families)
+                if variants:
+                    print(f"    INFERRED, NOT DOCUMENTED: {', '.join(variants)}")
         return
 
     client = ApiClient(args.cache_dir, args.delay, args.max_requests, args.refresh)
@@ -863,6 +969,7 @@ def run(args: argparse.Namespace) -> None:
                "archive_guid", "archive_name", "archive_birth", "archive_birth_place", "archive_mother",
                "archive_cover_name", "archive_record_type", "match_score", "review_priority", "evidence",
                "searched_name", "api_search_url", "archive_document_url",
+               "matched_name_origin", "searched_name_origin",
                "archive_source_summary", "archive_interpretation_limits"]
     errors: list[str] = []
     recovered_400s: list[str] = []
@@ -910,8 +1017,16 @@ def run(args: argparse.Namespace) -> None:
         # On an explicit refresh, bypass all cached queries for this person.
         client.refresh = bool(args.refresh or (args.refresh_stale and is_stale))
         before_cached = client.cached_responses
-        names = candidate_names(person)
-        mothers = mother_names(person, people, families)
+        documented_names = candidate_names(person)
+        inferred_names = (
+            inferred_married_names(person, people, families)
+            if getattr(args, "include_inferred_married_names", False) else []
+        )
+        names = documented_names + inferred_names
+        inferred_name_keys = {norm(name) for name in inferred_names}
+        mothers = mother_names(
+            person, people, families,
+            birth_only=getattr(args, "include_inferred_married_names", False))
         year = birth_year(person.born)
         birthplace = city_name(person.birthplace)
         print(f"[{index}/{len(eligible)}] {names[0]} ({year or '?'})", flush=True)
@@ -926,6 +1041,11 @@ def run(args: argparse.Namespace) -> None:
         # --exhaustive additionally searches names alone even when filtered matches exist.
         to_search: list[str] = []
         for name in names:
+            if norm(name) in inferred_name_keys and not clean_api_text(name, "nev"):
+                # Do not silently truncate a hypothetical long married name
+                # to an ambiguous two-word prefix. Still compare the full
+                # form when scoring records discovered via other names.
+                continue
             if name not in to_search:
                 to_search.append(name)
             # Accent-folded alternative may be required for inconsistent indexing.
@@ -1020,6 +1140,12 @@ def run(args: argparse.Namespace) -> None:
                 "evidence": reasons,
                 "searched_name": searched_name,
                 "api_search_url": url,
+                "matched_name_origin": (
+                    "inferred_married" if norm(matched_name) in inferred_name_keys else "gedcom"
+                ),
+                "searched_name_origin": (
+                    "inferred_married" if norm(searched_name) in inferred_name_keys else "gedcom"
+                ),
                 "archive_document_url": (
                     f"https://nyitottaktak.hu/#dokumentum/{result['guid']}"
                     if result.get("guid") else ""
@@ -1162,6 +1288,9 @@ def main() -> None:
                         help="Discard previous checkpoint progress and start a fresh result set")
     parser.add_argument("--exhaustive", action="store_true", help="Also search name-only and unaccented variants")
     parser.add_argument("--include-undated", action="store_true", help="Include GEDCOM people with no birth year")
+    parser.add_argument("--include-inferred-married-names", action="store_true",
+                        help="Try speculative Hungarian married-name forms from explicit spouse "
+                             "and MARR records; requires a separate checkpoint from regular searches")
     parser.add_argument("--since", type=int, default=DEFAULT_FIRST_YEAR)
     parser.add_argument("--until", type=int, default=DEFAULT_LAST_YEAR)
     parser.add_argument("--year-tolerance", type=int, default=2)
