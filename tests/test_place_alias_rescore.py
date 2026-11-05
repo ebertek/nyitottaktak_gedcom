@@ -28,6 +28,28 @@ class PlaceAliasTests(unittest.TestCase):
         self.assertNotEqual(finder.normalized_city("Kecskemét"), finder.normalized_city("Mezőkövesd"))
         self.assertNotEqual(finder.normalized_city("Kecskemét"), finder.normalized_city("Szabadka"))
 
+    def test_historical_places_and_districts_from_multiple_countries(self):
+        pairs = (
+            ("Odžaci, Vojvodina, Yugoslavia", "Hódság"),
+            ("Péterréve, Voivodeship of Serbia and Banat of Temeschwar",
+             "Bačko Petrovo Selo"),
+            ("Čakovci, Syrmia, Croatia-Slavonia", "Csák"),
+            ("Subotica, North Bačka, Serbia", "Szabadka, Bács-Bodrog, Hungary"),
+            ("Bajmok, Subotica, North Bačka, Serbia", "Bajmok"),
+            ("Budapest XI, Budapest, Hungary", "Budapest XI."),
+            ("Budapest XII, Budapest, Hungary", "Budapest"),
+            ("Budapest XIV, Budapest, Hungary", "Budapest"),
+            ("Mezőkövesd, Borsod-Gömör-Kishont, Hungary", "MEZÖKÖVESD"),
+        )
+        for first, second in pairs:
+            with self.subTest(first=first, second=second):
+                self.assertEqual(finder.normalized_city(first),
+                                 finder.normalized_city(second))
+        self.assertEqual(finder.api_place("Odžaci, Vojvodina, Yugoslavia"), "Hódság")
+        self.assertEqual(finder.api_place("Čakovci, Syrmia, Croatia-Slavonia"), "Csák")
+        self.assertEqual(finder.api_place("Bačko Petrovo Selo, Serbia"), "Péterréve")
+        self.assertEqual(finder.api_place("Bajmok, Subotica, Serbia"), "Bajmok")
+
     def test_full_identity_agreement_with_historical_birthplace_alias(self):
         person = finder.Person(
             xref="fictional-I1", born="17 Oct 1966",
