@@ -245,6 +245,24 @@ def birth_name_parts(person: Person) -> tuple[str, str] | None:
     return None
 
 
+def hungarian_ne(name: str) -> str:
+    """Append Hungarian married-name -né, lengthening final short a/e.
+
+    For example, Béla -> Béláné and Imre -> Imréné. Preserve the rest of
+    the name, including historical spellings, without guessing legal use.
+    """
+    name = name.strip()
+    if name.endswith("a"):
+        name = name[:-1] + "á"
+    elif name.endswith("e"):
+        name = name[:-1] + "é"
+    elif name.endswith("A"):
+        name = name[:-1] + "Á"
+    elif name.endswith("E"):
+        name = name[:-1] + "É"
+    return f"{name}né"
+
+
 def inferred_married_names(
         person: Person, people: dict[str, Person], families: dict[str, Family]) -> list[str]:
     """Generate unverified Hungarian forms only for explicit recorded marriages.
@@ -274,20 +292,22 @@ def inferred_married_names(
         if norm(spouse_surname) in MISSING_SURNAMES:
             continue
         first_given = given.split()[0]
+        spouse_full_ne = f"{spouse_surname} {hungarian_ne(spouse_given)}"
+        spouse_surname_ne = hungarian_ne(spouse_surname)
         forms = [
-            f"{spouse_surname} {spouse_given}né",
-            f"{spouse_surname}né {birth_surname} {given}",
+            spouse_full_ne,
+            f"{spouse_surname_ne} {birth_surname} {given}",
             f"{spouse_surname} {given}",
-            f"{spouse_surname} {spouse_given}né {birth_surname} {given}",
+            f"{spouse_full_ne} {birth_surname} {given}",
         ]
         # Archive search has a strict 25-character limit. A shorter form
         # using the first given name can be searched without silently
         # truncating a surname or a -né marker.
         if first_given != given:
             forms.extend([
-                f"{spouse_surname}né {birth_surname} {first_given}",
+                f"{spouse_surname_ne} {birth_surname} {first_given}",
                 f"{spouse_surname} {first_given}",
-                f"{spouse_surname} {spouse_given}né {birth_surname} {first_given}",
+                f"{spouse_full_ne} {birth_surname} {first_given}",
             ])
         for form in forms:
             if norm(form) not in seen:

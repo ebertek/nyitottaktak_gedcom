@@ -114,6 +114,33 @@ class InferredMarriedNameTests(unittest.TestCase):
         self.assertFalse(self.families["F3"].marriage_recorded)
         self.assertEqual(self.people["I4"].childhood_families, ["F1"])
 
+    def test_hungarian_ne_lengthens_final_short_a_and_e(self):
+        # Common Hungarian spellings, using fictional, unconnected identities.
+        self.assertEqual(finder.hungarian_ne("Béla"), "Béláné")
+        self.assertEqual(finder.hungarian_ne("Imre"), "Imréné")
+        self.assertEqual(finder.hungarian_ne("Géza"), "Gézáné")
+        self.assertEqual(finder.hungarian_ne("Zoltán"), "Zoltánné")
+        self.assertEqual(finder.hungarian_ne("Pista"), "Pistáné")
+        self.assertEqual(finder.hungarian_ne("Kele"), "Keléné")
+
+    def test_inferred_forms_use_correct_ne_spelling(self):
+        # Do not use actual relatives in public tests.
+        wife = finder.Person("W1", names=[("Ágnes /Fenyvesi/", "birth")],
+                             spouse_families=["F99"])
+        husband = finder.Person("H1", names=[("Béla /Kőris/", "birth")])
+        family = finder.Family(husband="H1", wife="W1", marriage_recorded=True)
+        forms = finder.inferred_married_names(
+            wife, {"W1": wife, "H1": husband}, {"F99": family})
+        self.assertIn("Kőris Béláné", forms)
+        self.assertIn("Kőris Béláné Fenyvesi Ágnes", forms)
+        self.assertNotIn("Kőris Bélané", forms)
+
+        husband.names = [("Imre /Kőris/", "birth")]
+        forms = finder.inferred_married_names(
+            wife, {"W1": wife, "H1": husband}, {"F99": family})
+        self.assertIn("Kőris Imréné", forms)
+        self.assertNotIn("Kőris Imrené", forms)
+
     def test_generates_all_traditional_forms_without_claiming_legal_use(self):
         variants = finder.inferred_married_names(
             self.people["I1"], self.people, self.families)
@@ -121,7 +148,7 @@ class InferredMarriedNameTests(unittest.TestCase):
         self.assertIn("Borókainé Fenyvesi Ágnes Éva", variants)
         self.assertIn("Borókainé Fenyvesi Ágnes", variants)
         self.assertIn("Borókai Lőrincné Fenyvesi Ágnes Éva", variants)
-        self.assertIn("Csengeri Imrené", variants)
+        self.assertIn("Csengeri Imréné", variants)
         # Explicit GEDCOM married name remains documented, not an inference.
         self.assertNotIn("Borókai Ágnes Éva", variants)
         self.assertNotIn("Bükkösi Zoltánné", variants)
