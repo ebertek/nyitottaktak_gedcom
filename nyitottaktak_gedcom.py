@@ -1560,11 +1560,12 @@ def main() -> None:
         return
     if args.place_conflicts_only:
         source = args.review_input or args.output
+        coverage = args.review_coverage_input or source.with_suffix(".coverage.csv")
+        checkpoint = args.checkpoint or source.with_suffix(".checkpoint.json")
         detail = args.place_conflicts_output or source.with_suffix(".place-conflicts.csv")
         summary = args.place_summary_output or source.with_suffix(".place-summary.csv")
         protected = (
-            source, source.with_suffix(".coverage.csv"),
-            source.with_suffix(".checkpoint.json"), source.with_suffix(".review.csv"),
+            source, coverage, checkpoint, source.with_suffix(".review.csv"),
             source.with_suffix(".shortlist.csv"), source.with_suffix(".audit.csv"),
             source.with_suffix(".quality.csv"), source.with_suffix(".consistency.csv"),
             source.with_suffix(".shared-records.csv"),
