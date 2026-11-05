@@ -1584,7 +1584,7 @@ def main() -> None:
         print(f"Offline birthplace review: {count} selected P5 birthplace conflicts "
               f"-> {detail}")
         print("Birthplace assessments: " + ", ".join(
-            f"{label}={statuses[label]}" for label in ASSESSMENTS
+            f"{label}={statuses.get(label, 0)}" for label in ASSESSMENTS
         ) + f" -> {summary}")
         if place_index is None:
             print("NOTE: No local GeoNames index selected. Only the reviewed "
@@ -1639,7 +1639,7 @@ def main() -> None:
         ) + f" -> {collision_triage}")
         print(f"Birthplace reconciliation: {place_count} selected P5 pairs; " +
               ", ".join(
-                  f"{label}={place_statuses[label]}" for label in ASSESSMENTS
+                  f"{label}={place_statuses.get(label, 0)}" for label in ASSESSMENTS
               ) + f" -> {place_detail}, {place_summary}")
         p5 = summarize_selected_p5_conflicts(candidates)
         print(
