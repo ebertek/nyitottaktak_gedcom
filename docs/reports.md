@@ -12,6 +12,8 @@ With the default `--output results/nyitottaktak_matches.csv`, these files are wr
 | `results/nyitottaktak_matches.review.csv` | One row per GEDCOM person, with highest-score and best-evidence leads shown separately |
 | `results/nyitottaktak_matches.shortlist.csv` | Research queue: best evidence-based candidate per person, omitting name-only and no-lead cases by default |
 | `results/nyitottaktak_matches.audit.csv` | Offline score/evidence drift details for rows whose saved evidence differs from current scoring, or cannot be checked |
+| `results/nyitottaktak_matches.consistency.csv` | Private candidate-level historical chronology and shared-GUID review prompts |
+| `results/nyitottaktak_matches.shared-records.csv` | One private row per archive GUID associated with multiple distinct GEDCOM IDs |
 | `results/nyitottaktak_matches.coverage.csv` | One row per selected person with search-completion status and warnings |
 | `results/nyitottaktak_matches.checkpoint.json` | Completed searches and their saved candidate rows, for safe resumption |
 | `results/nyitottaktak_matches.errors.txt` | Reported query errors/limitations, if any |
@@ -121,6 +123,38 @@ python nyitottaktak_gedcom.py --rescore-only
 The audit CSV includes private GEDCOM and archive identifiers, before/after scores, evidence text and classifications; it only lists changed or unverifiable rows. **Never commit or share the detailed CSV.** An audit with no detected drift is a check of **saved scoring consistency only**—not archive completeness, not verification against the latest online archive, not confirmation that old filtered-out candidates can be recovered, and not proof of someone's historical role.
 
 If you are using another candidate set, pass `--review-input PATH`; optional `--audit-output PATH` chooses the audit destination. Rescoring an existing `*.rescored.csv` creates a *new*, more deeply suffixed result rather than overwriting the original input.
+
+## Historical chronology and shared archival GUIDs
+
+`--consistency-only` performs **two conservative offline audits** of the currently saved candidate CSV. No GEDCOM or network access is required:
+
+```bash
+python nyitottaktak_gedcom.py --consistency-only
+# To check the corrected identity scores:
+python nyitottaktak_gedcom.py --consistency-only \
+  --review-input results/nyitottaktak_matches.rescored.csv
+```
+
+The two private output files are:
+
+- `*.consistency.csv`: **one row per flagged candidate row**, containing the GEDCOM ID, archive GUID/document URL, dates, source scope, age at the beginning of that scope, chronology flags, count of other GEDCOM IDs sharing the same archive GUID, and an explanation.
+- `*.shared-records.csv`: **one row per shared non-empty archive GUID**, showing the unique GEDCOM IDs involved, known 4-digit birth years and their spread. Repeated queries for the *same* GEDCOM ID do not create a false shared-record alert. Blank GUIDs never become a common identity.
+
+Chronology prompts include:
+
+| Flag | Review meaning |
+| --- | --- |
+| `older_birth_cohort_review` | The person would have been **65 or older at the beginning of the documented reference scope**; warrants human checking, but is absolutely *not* an impossibility |
+| `born_after_archive_scope` | The GEDCOM birth year falls after the archival reference period; check dating, scope and individual identity |
+| `birth_year_discrepancy` | The GEDCOM and archival birth years are at least two years apart; inspect original birth records |
+
+The broad reference period is **1944–1990**, while B-napló uses **1956–1962**, as described in the project's archive-source guidance. These are **historical collection/reference ranges, not known dates of recruitment, activity or an individual's appearance in the archive**. A person born in 1853, 1866 or 1877 might legitimately appear as a retrospective reference. The age threshold is a workflow heuristic, not an assertion of suspicious conduct or a likelihood of being a particular individual. `ABT`/other approximate GEDCOM birth years remain approximate; unknown or ambiguous 2-digit years are not expanded into guessed centuries. A one-year birth-year discrepancy does not raise the dedicated two-year flag, but the matching evidence still remains visible separately.
+
+A shared GUID **does not prove** two GEDCOM people are the same person, nor that the archive is wrong. One document may refer to several people; a family tree may also contain duplicates. Compare the original document, people and years independently. An ID shared among individuals with different birth years is simply a useful investigative clue.
+
+The grouped `*.review.csv` now appends `top_chronology_flags`, `best_evidence_chronology_flags`, `candidate_chronology_review_count`, `candidate_shared_archive_guid_count` and `best_evidence_archive_guid_shared_people`. The prioritized shortlist appends corresponding selected-lead and per-person alert fields. **These fields do not change identity scoring, evidence ranking, review ordering, candidate retention or checkpoints.**
+
+The audits are produced automatically by `--review-only`, `--shortlist-only`, `--rescore-only` and completed executed scans, or on demand using `--consistency-only`. `--consistency-output PATH` and `--shared-records-output PATH` customize the destinations; output collisions with candidate, checkpoint and standard report files are rejected in advance. These reports are **private**; never commit or share identifying detail CSVs.
 
 ## Coverage is not archival completeness
 
