@@ -80,7 +80,8 @@ The script uses names, birth dates, birthplaces and mothers' names from GEDCOM r
 Built-in mappings cover Szabadka/Subotica, Hódság/Odžaci, Péterréve/Bačko Petrovo Selo and Csák/Čakovci. To extend this across **all populated places with Hungarian names listed by GeoNames**, generate a local index once:
 
 ```bash
-# Historical Hungary and neighboring countries (smaller download)
+# Historical Hungary region: HU, RO, SK, RS, UA, HR, AT, SI
+# RS includes Vojvodina. Download covers entire present-day countries.
 python scripts/build_place_index.py --download
 
 # Or use the full worldwide GeoNames export (large download)
