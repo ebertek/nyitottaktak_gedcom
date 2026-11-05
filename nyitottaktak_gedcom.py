@@ -696,12 +696,18 @@ CHECKPOINT_VERSION = 1
 
 def checkpoint_config(args: argparse.Namespace) -> dict:
     """Only search/scoring options belong here, not per-run budgets or scope."""
-    return {
+    config = {
         "exhaustive": args.exhaustive,
         "year_tolerance": args.year_tolerance,
         "api_year_ceiling": args.api_year_ceiling,
         "min_score": args.min_score,
     }
+    # Keep existing checkpoints valid for the unchanged default behavior.
+    # Turning on inferred names changes query coverage and needs a separate
+    # checkpoint rather than silently skipping previously completed people.
+    if getattr(args, "include_inferred_married_names", False):
+        config["inferred_married_names"] = True
+    return config
 
 
 def load_checkpoint(path: Path, gedcom_digest: str, config: dict) -> dict:
@@ -912,13 +918,19 @@ def run(args: argparse.Namespace) -> None:
     if not args.execute:
         print("PREVIEW ONLY. Add --execute to query the site. First eligible people:")
         for person in eligible[:20]:
-            mom = ", ".join(mother_names(person, people, families)) or "unknown"
+            mom = ", ".join(mother_names(
+                person, people, families,
+                birth_only=getattr(args, "include_inferred_married_names", False))) or "unknown"
             original_place = first_place(person.birthplace)
             search_place = api_place(person.birthplace)
             place_label = original_place or "?"
             if search_place and search_place != original_place:
                 place_label += f" -> search: {search_place}"
             print(f"  {person.xref}: {', '.join(candidate_names(person))} | {person.born or '?'} | {place_label} | mother: {mom}")
+            if getattr(args, "include_inferred_married_names", False):
+                variants = inferred_married_names(person, people, families)
+                if variants:
+                    print(f"    INFERRED, NOT DOCUMENTED: {', '.join(variants)}")
         return
 
     client = ApiClient(args.cache_dir, args.delay, args.max_requests, args.refresh)
@@ -951,6 +963,7 @@ def run(args: argparse.Namespace) -> None:
                "archive_guid", "archive_name", "archive_birth", "archive_birth_place", "archive_mother",
                "archive_cover_name", "archive_record_type", "match_score", "review_priority", "evidence",
                "searched_name", "api_search_url", "archive_document_url",
+               "matched_name_origin", "searched_name_origin",
                "archive_source_summary", "archive_interpretation_limits"]
     errors: list[str] = []
     recovered_400s: list[str] = []
@@ -998,8 +1011,16 @@ def run(args: argparse.Namespace) -> None:
         # On an explicit refresh, bypass all cached queries for this person.
         client.refresh = bool(args.refresh or (args.refresh_stale and is_stale))
         before_cached = client.cached_responses
-        names = candidate_names(person)
-        mothers = mother_names(person, people, families)
+        documented_names = candidate_names(person)
+        inferred_names = (
+            inferred_married_names(person, people, families)
+            if getattr(args, "include_inferred_married_names", False) else []
+        )
+        names = documented_names + inferred_names
+        inferred_name_keys = {norm(name) for name in inferred_names}
+        mothers = mother_names(
+            person, people, families,
+            birth_only=getattr(args, "include_inferred_married_names", False))
         year = birth_year(person.born)
         birthplace = city_name(person.birthplace)
         print(f"[{index}/{len(eligible)}] {names[0]} ({year or '?'})", flush=True)
@@ -1014,6 +1035,11 @@ def run(args: argparse.Namespace) -> None:
         # --exhaustive additionally searches names alone even when filtered matches exist.
         to_search: list[str] = []
         for name in names:
+            if norm(name) in inferred_name_keys and not clean_api_text(name, "nev"):
+                # Do not silently truncate a hypothetical long married name
+                # to an ambiguous two-word prefix. Still compare the full
+                # form when scoring records discovered via other names.
+                continue
             if name not in to_search:
                 to_search.append(name)
             # Accent-folded alternative may be required for inconsistent indexing.
@@ -1108,6 +1134,12 @@ def run(args: argparse.Namespace) -> None:
                 "evidence": reasons,
                 "searched_name": searched_name,
                 "api_search_url": url,
+                "matched_name_origin": (
+                    "inferred_married" if norm(matched_name) in inferred_name_keys else "gedcom"
+                ),
+                "searched_name_origin": (
+                    "inferred_married" if norm(searched_name) in inferred_name_keys else "gedcom"
+                ),
                 "archive_document_url": (
                     f"https://nyitottaktak.hu/#dokumentum/{result['guid']}"
                     if result.get("guid") else ""
@@ -1250,6 +1282,9 @@ def main() -> None:
                         help="Discard previous checkpoint progress and start a fresh result set")
     parser.add_argument("--exhaustive", action="store_true", help="Also search name-only and unaccented variants")
     parser.add_argument("--include-undated", action="store_true", help="Include GEDCOM people with no birth year")
+    parser.add_argument("--include-inferred-married-names", action="store_true",
+                        help="Try speculative Hungarian married-name forms from explicit spouse "
+                             "and MARR records; requires a separate checkpoint from regular searches")
     parser.add_argument("--since", type=int, default=DEFAULT_FIRST_YEAR)
     parser.add_argument("--until", type=int, default=DEFAULT_LAST_YEAR)
     parser.add_argument("--year-tolerance", type=int, default=2)
