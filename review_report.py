@@ -11,6 +11,8 @@ import csv
 from collections import Counter, defaultdict
 from pathlib import Path
 
+from consistency_audit import chronology
+
 
 FIELDS = [
     "gedcom_id",
@@ -57,6 +59,11 @@ FIELDS = [
     "best_evidence_missing_gedcom_identifiers",
     "best_evidence_matched_name_origin",
     "best_evidence_is_highest_score",
+    "top_chronology_flags",
+    "best_evidence_chronology_flags",
+    "candidate_chronology_review_count",
+    "candidate_shared_archive_guid_count",
+    "best_evidence_archive_guid_shared_people",
 ]
 
 # Order explicitly describes *identity checking effort*, not suspected conduct.
@@ -296,6 +303,18 @@ def build_review_rows(candidates: list[dict], coverage: list[dict] | None = None
         evidence_counts = Counter(a["classification"] for a in assessments)
         chosen = select_best_evidence(ordered)
         best_row, best_assessment = chosen if chosen else ({}, {})
+        top_chronology = chronology(top)["chronology_flags"] if top else ""
+        best_chronology = chronology(best_row)["chronology_flags"] if best_row else ""
+        chronology_review_count = sum(
+            bool(chronology(row)["chronology_flags"]) for row in ordered
+        )
+        shared_candidate_count = sum(
+            bool(str(row.get("archive_guid") or "").strip() and
+                 len(shared_guids[str(row.get("archive_guid") or "").strip()]) > 1)
+            for row in ordered
+        )
+        best_guid = str(best_row.get("archive_guid") or "").strip()
+        shared_best_count = len(shared_guids[best_guid]) if best_guid else 0
         evidence = str(top.get("evidence") or "")
         found = evidence.casefold()
         flags = []
@@ -404,6 +423,13 @@ def build_review_rows(candidates: list[dict], coverage: list[dict] | None = None
             ),
             "best_evidence_is_highest_score": (
                 "yes" if best_row is top else "no" if best_row else ""
+            ),
+            "top_chronology_flags": top_chronology,
+            "best_evidence_chronology_flags": best_chronology,
+            "candidate_chronology_review_count": chronology_review_count,
+            "candidate_shared_archive_guid_count": shared_candidate_count,
+            "best_evidence_archive_guid_shared_people": (
+                shared_best_count if shared_best_count > 1 else ""
             ),
         })
 
