@@ -58,12 +58,15 @@ class Person:
     born: str = ""
     birthplace: str = ""
     childhood_families: list[str] = field(default_factory=list)
+    spouse_families: list[str] = field(default_factory=list)
 
 
 @dataclass
 class Family:
+    husband: str = ""
     wife: str = ""
     children: list[str] = field(default_factory=list)
+    marriage_recorded: bool = False
 
 
 def read_gedcom(path: Path) -> tuple[dict[str, Person], dict[str, Family]]:
@@ -113,6 +116,8 @@ def read_gedcom(path: Path) -> tuple[dict[str, Person], dict[str, Family]]:
                     name_index = len(p.names) - 1
                 elif tag == "FAMC" and value.startswith("@"):
                     p.childhood_families.append(value.strip("@"))
+                elif tag == "FAMS" and value.startswith("@"):
+                    p.spouse_families.append(value.strip("@"))
                 elif tag in ("_AKA", "_MARNM") and value:
                     p.names.append((value, tag))
                 else:
@@ -131,16 +136,23 @@ def read_gedcom(path: Path) -> tuple[dict[str, Person], dict[str, Family]]:
                         p.structured_names.setdefault(name_index, {})[tag] = value
         elif kind == "FAM" and level == 1:
             f = families[owner]
-            if tag == "WIFE":
+            if tag == "HUSB":
+                f.husband = value.strip("@")
+            elif tag == "WIFE":
                 f.wife = value.strip("@")
             elif tag == "CHIL":
                 f.children.append(value.strip("@"))
+            elif tag == "MARR" and value.upper() != "N":
+                f.marriage_recorded = True
 
-    # Some GEDCOM exports identify parent families only through FAM/CHIL.
+    # Some GEDCOM exports identify relationships only through FAM members.
     for fid, f in families.items():
         for child in f.children:
             if child in people and fid not in people[child].childhood_families:
                 people[child].childhood_families.append(fid)
+        for partner in (f.husband, f.wife):
+            if partner in people and fid not in people[partner].spouse_families:
+                people[partner].spouse_families.append(fid)
     return people, families
 
 
