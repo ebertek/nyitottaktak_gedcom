@@ -223,8 +223,14 @@ def birth_name_parts(person: Person) -> tuple[str, str] | None:
     Never borrow the surname or given names from a married NAME to manufacture
     another legal identity. Prefer structured GEDCOM fields when available.
     """
-    indexed = sorted(enumerate(person.names),
-                     key=lambda item: item[1][1] not in ("birth", "maiden", ""))
+    indexed = sorted(
+        enumerate(person.names),
+        key=lambda item: (
+            item[1][1] not in ("birth", "maiden"),
+            item[1][1] not in ("birth", "maiden", ""),
+            item[0],
+        ),
+    )
     for index, (raw, name_type) in indexed:
         if name_type not in ("birth", "maiden", ""):
             continue
