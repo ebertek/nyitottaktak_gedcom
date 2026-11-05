@@ -190,7 +190,7 @@ def has_gedcom_surname(raw: str) -> bool:
                for surname in surnames)
 
 
-def candidate_names(person: Person) -> list[str]:
+def candidate_names(person: Person, birth_only: bool = False) -> list[str]:
     # GEDCOM's birth NAME is already the maiden name for women: use it directly.
     # Prefer birth/primary names; search explicitly recorded married/alias names
     # as alternatives, without guessing a surname from the spouse.
@@ -199,6 +199,8 @@ def candidate_names(person: Person) -> list[str]:
                           key=lambda n: (n[1][1] not in ("birth", ""), n[1][1] == "married"))
     names: list[str] = []
     for index, (raw, _type) in sorted_names:
+        if birth_only and _type not in ("", "birth", "maiden"):
+            continue
         if has_gedcom_surname(raw):
             candidate = human_name(raw)
         else:
@@ -215,13 +217,87 @@ def candidate_names(person: Person) -> list[str]:
     return names
 
 
-def mother_names(person: Person, people: dict[str, Person], families: dict[str, Family]) -> list[str]:
+def birth_name_parts(person: Person) -> tuple[str, str] | None:
+    """Surname and given names from the first documented birth/primary name.
+
+    Never borrow the surname or given names from a married NAME to manufacture
+    another legal identity. Prefer structured GEDCOM fields when available.
+    """
+    indexed = sorted(enumerate(person.names),
+                     key=lambda item: item[1][1] not in ("birth", "maiden", ""))
+    for index, (raw, name_type) in indexed:
+        if name_type not in ("birth", "maiden", ""):
+            continue
+        parts = person.structured_names.get(index, {})
+        match = re.search(r"/([^/]+)/", raw)
+        surname = (parts.get("SURN") or (match.group(1) if match else "")).strip(" /")
+        given = (parts.get("GIVN") or re.sub(r"/[^/]+/", " ", raw)).strip()
+        if (not norm(surname) or norm(surname) in MISSING_SURNAMES or
+                not norm(given)):
+            continue
+        return surname, given
+    return None
+
+
+def inferred_married_names(
+        person: Person, people: dict[str, Person], families: dict[str, Family]) -> list[str]:
+    """Generate unverified Hungarian forms only for explicit recorded marriages.
+
+    This is a search heuristic. A marriage record does not establish which
+    name form either spouse actually used, and no generated form is added to
+    the GEDCOM or used as a mother's birth name.
+    """
+    original = birth_name_parts(person)
+    if not original:
+        return []
+    birth_surname, given = original
+    documented = {norm(name) for name in candidate_names(person)}
+    variants: list[str] = []
+    seen = set(documented)
+
+    for family_id in person.spouse_families:
+        family = families.get(family_id)
+        if (not family or family.wife != person.xref or
+                not family.husband or not family.marriage_recorded):
+            continue
+        husband = people.get(family.husband)
+        husband_name = birth_name_parts(husband) if husband else None
+        if not husband_name:
+            continue
+        spouse_surname, spouse_given = husband_name
+        if norm(spouse_surname) in MISSING_SURNAMES:
+            continue
+        first_given = given.split()[0]
+        forms = [
+            f"{spouse_surname} {spouse_given}né",
+            f"{spouse_surname}né {birth_surname} {given}",
+            f"{spouse_surname} {given}",
+            f"{spouse_surname} {spouse_given}né {birth_surname} {given}",
+        ]
+        # Archive search has a strict 25-character limit. A shorter form
+        # using the first given name can be searched without silently
+        # truncating a surname or a -né marker.
+        if first_given != given:
+            forms.extend([
+                f"{spouse_surname}né {birth_surname} {first_given}",
+                f"{spouse_surname} {first_given}",
+                f"{spouse_surname} {spouse_given}né {birth_surname} {first_given}",
+            ])
+        for form in forms:
+            if norm(form) not in seen:
+                seen.add(norm(form))
+                variants.append(form)
+    return variants
+
+
+def mother_names(person: Person, people: dict[str, Person], families: dict[str, Family],
+                 birth_only: bool = False) -> list[str]:
     mothers: list[str] = []
     for family_id in person.childhood_families:
         mother_id = families.get(family_id, Family()).wife
         mother = people.get(mother_id)
         if mother:
-            for name in candidate_names(mother):
+            for name in candidate_names(mother, birth_only=birth_only):
                 if name not in mothers:
                     mothers.append(name)
     return mothers
