@@ -100,22 +100,31 @@ class PlaceResolver:
                                 for current in index[name_key]):
                 index[name_key].append(entry)
 
-    def find(self, full_place: str) -> Entry | None:
+    def candidates(self, full_place: str) -> tuple[Entry, ...]:
+        """Possible gazetteer entries, preserving ambiguity for manual review.
+
+        Reviewed aliases take precedence, as in find(). A historical country
+        hint may resolve a *unique* matching entry; otherwise all plausible
+        entries remain visible. An empty tuple means the index cannot resolve
+        the name, not proof that the locality does not exist.
+        """
         locality = full_place.split(",", 1)[0].strip()
         lookup = key(locality)
         if not lookup:
-            return None
-        # Reviewed pairs take precedence over generated entries for the same
-        # spellings. Other names are matched only when a single town resolves.
+            return ()
         options = self.reviewed.get(lookup) or self.indexed.get(lookup) or []
-        if len(options) == 1:
-            return options[0]
+        if len(options) <= 1:
+            return tuple(options)
         country = country_hint(full_place)
         if country:
             matching = [entry for entry in options if entry.country == country]
             if len(matching) == 1:
-                return matching[0]
-        return None
+                return tuple(matching)
+        return tuple(options)
+
+    def find(self, full_place: str) -> Entry | None:
+        options = self.candidates(full_place)
+        return options[0] if len(options) == 1 else None
 
     def equivalent(self, first: str, second: str) -> bool:
         name_a = key(first.split(",", 1)[0])

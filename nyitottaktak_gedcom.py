@@ -34,6 +34,7 @@ from research_shortlist import shortlist_files, write_shortlist_report
 from score_audit import audit_candidate_file, write_audit_report
 from consistency_audit import write_consistency_reports
 from collision_analysis import summarize_selected_p5_conflicts, write_collision_reports
+from birthplace_audit import ASSESSMENTS, write_birthplace_reports
 from quality_report import write_quality_report
 from hungarian_places import PlaceResolver
 from scripts.build_place_index import ensure_default_index
@@ -946,11 +947,16 @@ def run(args: argparse.Namespace) -> None:
                               args.output.with_suffix(".collision-summary.csv"))
     collision_triage_path = (getattr(args, "collision_triage_output", None) or
                              args.output.with_suffix(".collision-triage.csv"))
+    place_detail_path = (getattr(args, "place_conflicts_output", None) or
+                         args.output.with_suffix(".place-conflicts.csv"))
+    place_summary_path = (getattr(args, "place_summary_output", None) or
+                          args.output.with_suffix(".place-summary.csv"))
     protected_paths = (
         args.output, coverage_path, review_path,
         getattr(args, "checkpoint", None) or args.output.with_suffix(".checkpoint.json"),
         shortlist_path, consistency_path, shared_path,
         collision_summary_path, collision_triage_path,
+        place_detail_path, place_summary_path,
     )
     if len({path.resolve() for path in protected_paths}) != len(protected_paths):
         raise ValueError("Report outputs must not overwrite candidates, coverage, "
@@ -1045,6 +1051,10 @@ def run(args: argparse.Namespace) -> None:
         write_consistency_reports(candidate_rows, consistency_path, shared_path)
         write_collision_reports(
             candidate_rows, collision_summary_path, collision_triage_path
+        )
+        write_birthplace_reports(
+            candidate_rows, PLACE_RESOLVER, normalized_place_input,
+            place_detail_path, place_summary_path,
         )
 
     for index, person in enumerate(eligible, 1):
@@ -1381,13 +1391,15 @@ def choose_default_output(args: argparse.Namespace, argv: list[str]) -> None:
             args.review_only or args.rescore_only or args.quality_only
             or getattr(args, "shortlist_only", False)
             or getattr(args, "audit_only", False)
-            or getattr(args, "consistency_only", False)):
+            or getattr(args, "consistency_only", False)
+            or getattr(args, "place_conflicts_only", False)):
         return
 
     offline_report = (args.review_only or args.rescore_only or
                       args.quality_only or getattr(args, "shortlist_only", False)
                       or getattr(args, "audit_only", False)
-                      or getattr(args, "consistency_only", False))
+                      or getattr(args, "consistency_only", False)
+                      or getattr(args, "place_conflicts_only", False))
     coverage = args.coverage_only
     legacy_exists = (LEGACY_DEFAULT_OUTPUT.exists() if offline_report else
                      LEGACY_DEFAULT_OUTPUT.with_suffix(".checkpoint.json").exists())
@@ -1466,6 +1478,12 @@ def main() -> None:
                         help="Source/evidence collision aggregates (default: *.collision-summary.csv)")
     parser.add_argument("--collision-triage-output", type=Path, default=None,
                         help="Private shared-GUID evidence profiles (default: *.collision-triage.csv)")
+    parser.add_argument("--place-conflicts-only", action="store_true",
+                        help="Audit selected P5 birthplace conflicts against local place references offline")
+    parser.add_argument("--place-conflicts-output", type=Path, default=None,
+                        help="Private P5 birthplace pair review (default: *.place-conflicts.csv)")
+    parser.add_argument("--place-summary-output", type=Path, default=None,
+                        help="Aggregate birthplace reconciliation counts (default: *.place-summary.csv)")
     parser.add_argument("--quality-only", action="store_true",
                         help="Summarize archive field completeness and identity evidence "
                              "per source from saved candidates; offline and GEDCOM-free")
@@ -1512,7 +1530,8 @@ def main() -> None:
         elif (args.execute and not args.no_auto_place_index and
               not (args.check_updates or args.rescore_only or
                    args.review_only or args.coverage_only or args.quality_only
-                   or args.shortlist_only or args.audit_only or args.consistency_only)):
+                   or args.shortlist_only or args.audit_only or args.consistency_only
+                   or args.place_conflicts_only)):
             # Only actual archive scans can download additional data. Preview
             # and offline/metadata-only commands preserve their no-GeoNames
             # network guarantees. Check inputs before starting a download.
@@ -1539,6 +1558,41 @@ def main() -> None:
         except ValueError as exc:
             parser.error(str(exc))
         return
+    if args.place_conflicts_only:
+        source = args.review_input or args.output
+        coverage = args.review_coverage_input or source.with_suffix(".coverage.csv")
+        checkpoint = args.checkpoint or source.with_suffix(".checkpoint.json")
+        detail = args.place_conflicts_output or source.with_suffix(".place-conflicts.csv")
+        summary = args.place_summary_output or source.with_suffix(".place-summary.csv")
+        protected = (
+            source, coverage, checkpoint, source.with_suffix(".review.csv"),
+            source.with_suffix(".shortlist.csv"), source.with_suffix(".audit.csv"),
+            source.with_suffix(".quality.csv"), source.with_suffix(".consistency.csv"),
+            source.with_suffix(".shared-records.csv"),
+            source.with_suffix(".collision-summary.csv"),
+            source.with_suffix(".collision-triage.csv"), detail, summary,
+        )
+        if len({p.resolve() for p in protected}) != len(protected):
+            parser.error("Birthplace report output would overwrite a source or existing report")
+        try:
+            warn_about_saved_scoring(source)
+            count, statuses = write_birthplace_reports(
+                read_csv(source), PLACE_RESOLVER, normalized_place_input,
+                detail, summary,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(f"Offline birthplace review: {count} selected P5 birthplace conflicts "
+              f"-> {detail}")
+        print("Birthplace assessments: " + ", ".join(
+            f"{label}={statuses.get(label, 0)}" for label in ASSESSMENTS
+        ) + f" -> {summary}")
+        if place_index is None:
+            print("NOTE: No local GeoNames index selected. Only the reviewed "
+                  "built-in aliases are available; do not infer different localities.")
+        print("NOTE: No candidate scores, GEDCOM data or checkpoints changed.")
+        print("NOTE: Detailed birthplace reports contain private identities; do not commit.")
+        return
     if args.consistency_only:
         source = args.review_input or args.output
         coverage = args.review_coverage_input or source.with_suffix(".coverage.csv")
@@ -1550,11 +1604,14 @@ def main() -> None:
         collision_triage = (
             args.collision_triage_output or source.with_suffix(".collision-triage.csv")
         )
+        place_detail = args.place_conflicts_output or source.with_suffix(".place-conflicts.csv")
+        place_summary = args.place_summary_output or source.with_suffix(".place-summary.csv")
         protected = (
             source, coverage, source.with_suffix(".review.csv"),
             source.with_suffix(".shortlist.csv"), source.with_suffix(".checkpoint.json"),
             source.with_suffix(".audit.csv"), source.with_suffix(".quality.csv"),
             consistency_path, shared_path, collision_summary, collision_triage,
+            place_detail, place_summary,
         )
         if len({p.resolve() for p in protected}) != len(protected):
             parser.error("Consistency/collision output would overwrite a source or existing report")
@@ -1565,6 +1622,10 @@ def main() -> None:
             )
             group_rows, profiles = write_collision_reports(
                 candidates, collision_summary, collision_triage
+            )
+            place_count, place_statuses = write_birthplace_reports(
+                candidates, PLACE_RESOLVER, normalized_place_input,
+                place_detail, place_summary,
             )
         except ValueError as exc:
             parser.error(str(exc))
@@ -1577,6 +1638,10 @@ def main() -> None:
                 "other_ambiguous_collision"
             )
         ) + f" -> {collision_triage}")
+        print(f"Birthplace reconciliation: {place_count} selected P5 pairs; " +
+              ", ".join(
+                  f"{label}={place_statuses.get(label, 0)}" for label in ASSESSMENTS
+              ) + f" -> {place_detail}, {place_summary}")
         p5 = summarize_selected_p5_conflicts(candidates)
         print(
             "Selected P5 conflicts (non-exclusive): "
@@ -1651,10 +1716,12 @@ def main() -> None:
         collision_triage = (
             args.collision_triage_output or target.with_suffix(".collision-triage.csv")
         )
+        place_detail = args.place_conflicts_output or target.with_suffix(".place-conflicts.csv")
+        place_summary = args.place_summary_output or target.with_suffix(".place-summary.csv")
         protected = (
             source, target, coverage, review_target, shortlist_target,
             consistency_target, shared_target, collision_summary, collision_triage,
-            source.with_suffix(".checkpoint.json"),
+            place_detail, place_summary, source.with_suffix(".checkpoint.json"),
         )
         if len({p.resolve() for p in protected}) != len(protected):
             parser.error("Rescored output must not overwrite source, reports or checkpoint")
@@ -1672,6 +1739,10 @@ def main() -> None:
             collision_groups, collision_types = write_collision_reports(
                 rescored_rows, collision_summary, collision_triage
             )
+            place_count, place_statuses = write_birthplace_reports(
+                rescored_rows, PLACE_RESOLVER, normalized_place_input,
+                place_detail, place_summary,
+            )
         except ValueError as exc:
             parser.error(str(exc))
         print(f"Offline rescoring: {count} candidate rows; {changed} scores changed -> {target}")
@@ -1682,6 +1753,8 @@ def main() -> None:
         print(f"Rescored collision evidence: {collision_groups} source/class groups; "
               f"{sum(collision_types.values())} shared GUIDs "
               f"-> {collision_summary}, {collision_triage}")
+        print(f"Rescored birthplace review: {place_count} selected P5 conflicts; "
+              f"see {place_detail}, {place_summary}")
         if priorities:
             print("Priorities: " + ", ".join(
                 f"{key}={priorities[key]}" for key in sorted(priorities)
@@ -1702,9 +1775,11 @@ def main() -> None:
         collision_triage = (
             args.collision_triage_output or source.with_suffix(".collision-triage.csv")
         )
+        place_detail = args.place_conflicts_output or source.with_suffix(".place-conflicts.csv")
+        place_summary = args.place_summary_output or source.with_suffix(".place-summary.csv")
         protected = (
             source, coverage, target, consistency_target, shared_target,
-            collision_summary, collision_triage,
+            collision_summary, collision_triage, place_detail, place_summary,
             source.with_suffix(".review.csv"), source.with_suffix(".checkpoint.json"),
         )
         if len({p.resolve() for p in protected}) != len(protected):
@@ -1724,12 +1799,18 @@ def main() -> None:
         collision_groups, collision_types = write_collision_reports(
             candidate_rows, collision_summary, collision_triage
         )
+        place_count, _ = write_birthplace_reports(
+            candidate_rows, PLACE_RESOLVER, normalized_place_input,
+            place_detail, place_summary,
+        )
         print(f"Offline research shortlist: {count} relatives -> {target}")
         print(f"Consistency audit: {flagged} flagged rows; {shared} shared GUIDs "
               f"-> {consistency_target}, {shared_target}")
         print(f"Collision evidence: {collision_groups} source/class groups; "
               f"{sum(collision_types.values())} shared GUIDs "
               f"-> {collision_summary}, {collision_triage}")
+        print(f"Birthplace reconciliation: {place_count} selected P5 conflicts "
+              f"-> {place_detail}, {place_summary}")
         print("Priorities: " + ", ".join(
             f"{key}={priorities[key]}" for key in sorted(priorities)
         ) if priorities else "Priorities: no actionable leads")
@@ -1750,10 +1831,12 @@ def main() -> None:
         collision_triage = (
             args.collision_triage_output or source.with_suffix(".collision-triage.csv")
         )
+        place_detail = args.place_conflicts_output or source.with_suffix(".place-conflicts.csv")
+        place_summary = args.place_summary_output or source.with_suffix(".place-summary.csv")
         protected = (
             source, coverage, target, shortlist_target, consistency_target,
             shared_target, collision_summary, collision_triage,
-            source.with_suffix(".checkpoint.json"),
+            place_detail, place_summary, source.with_suffix(".checkpoint.json"),
         )
         if len({p.resolve() for p in protected}) != len(protected):
             parser.error("Review outputs must not overwrite source, reports or checkpoint")
@@ -1779,11 +1862,17 @@ def main() -> None:
         collision_groups, collision_types = write_collision_reports(
             candidate_rows, collision_summary, collision_triage
         )
+        place_count, _ = write_birthplace_reports(
+            candidate_rows, PLACE_RESOLVER, normalized_place_input,
+            place_detail, place_summary,
+        )
         print(f"Consistency audit: {flagged} flagged rows; {shared} shared GUIDs "
               f"-> {consistency_target}, {shared_target}")
         print(f"Collision evidence: {collision_groups} source/class groups; "
               f"{sum(collision_types.values())} shared GUIDs "
               f"-> {collision_summary}, {collision_triage}")
+        print(f"Birthplace reconciliation: {place_count} selected P5 conflicts "
+              f"-> {place_detail}, {place_summary}")
         if priorities:
             print("Priorities: " + ", ".join(
                 f"{key}={priorities[key]}" for key in sorted(priorities)

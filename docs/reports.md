@@ -16,6 +16,8 @@ With the default `--output results/nyitottaktak_matches.csv`, these files are wr
 | `results/nyitottaktak_matches.shared-records.csv` | One private row per archive GUID associated with multiple distinct GEDCOM IDs |
 | `results/nyitottaktak_matches.collision-summary.csv` | Aggregate collision counts grouped by archive record type and independent identity-evidence class, with no names or person/GUID identifiers |
 | `results/nyitottaktak_matches.collision-triage.csv` | Private one-row-per-shared-GUID research queue distinguishing name-only overlaps from records with corroborated leads |
+| `results/nyitottaktak_matches.place-conflicts.csv` | Private, selected P5 birthplace-pair review with local gazetteer resolution and suggested verification steps |
+| `results/nyitottaktak_matches.place-summary.csv` | Identifier-free aggregate of selected P5 birthplace classifications by known archive source category |
 | `results/nyitottaktak_matches.coverage.csv` | One row per selected person with search-completion status and warnings |
 | `results/nyitottaktak_matches.checkpoint.json` | Completed searches and their saved candidate rows, for safe resumption |
 | `results/nyitottaktak_matches.errors.txt` | Reported query errors/limitations, if any |
@@ -183,6 +185,37 @@ Profile types are **mutually exclusive per GUID**. In the aggregate table, a sha
 **P5 conflict detail:** The prioritized shortlist now has `p5_conflict_birth_date`, `p5_conflict_mother`, `p5_conflict_birthplace` and `p5_conflict_count` for its **selected** P5 record. Its `next_research_step` explicitly identifies which original sources to compare. Separate `candidate_birth_date_conflicts`, `candidate_mother_conflicts` and `candidate_birthplace_conflicts` columns count conflicting *candidate rows across all records for that GEDCOM person*, and are also available in the grouped review. These counts can overlap; a single candidate can conflict on more than one field. **Never transfer a conflicting or agreeing identifier from one archive GUID to another.** P1/P2 classification and original heuristic scores remain unchanged. Running `--consistency-only` also prints the **aggregate count of selected P5 relatives and non-exclusive birth-date/mother/birthplace conflict totals**, with no family names or IDs in the terminal output. Use the rescored candidate CSV if saved evidence is stale; this audit deliberately does not re-score it.
 
 Use `--collision-summary-output PATH` and `--collision-triage-output PATH` to set custom destinations. The standard `--review-only`, `--shortlist-only`, `--rescore-only`, and executed scan workflows also regenerate collision reports. All findings are **identity-review prompts only**, not claims of recruitment or historical conduct.
+
+## Reconciling selected P5 birthplace conflicts
+
+P5 means the **selected archived candidate** contains an identity contradiction. The birthplace audit focuses specifically on selected P5 leads where the saved evidence says `birthplace differs`; it does not downgrade P1/P2 leads, or assume a different candidate for that relative is the same person.
+
+Run against a **rescored candidate CSV** (not an old shortlist), preserving its original candidate rows and checkpoints:
+
+```bash
+python nyitottaktak_gedcom.py --place-conflicts-only \
+  --review-input results/nyitottaktak_matches.rescored.csv
+```
+
+This command never loads GEDCOM data, queries the Nyitott Akták API, or automatically downloads a gazetteer. It uses the local `.nyitottaktak_cache/hungarian_places.csv`, if present, alongside the small built-in reviewed-alias table. To prebuild the optional index, follow [the gazetteer instructions](cli.md#birthplace-gazetteer); a missing index produces more unresolved results, **not** guesses.
+
+Two reports are generated:
+
+- **Private** `*.place-conflicts.csv`: one row per *selected P5 birthplace-contradiction lead*, including that person/archival GUID, the two original birthplaces, index entry IDs, counts of possible gazetteer entries, possible shared entry IDs, conservative status, index provenance, and suggested verification work. This contains private identities and must remain out of Git.
+- **Identifier-free** `*.place-summary.csv`: only the **known archival source category**, the status and number of selected P5 relatives. Unknown raw source strings become `(other/unreported)`, avoiding accidental disclosure of an unexpected upstream field. It has no raw names, places, GEDCOM IDs, or archival GUIDs.
+
+The four statuses have deliberately limited meanings:
+
+| Status | What it establishes | What it **does not** establish |
+| --- | --- | --- |
+| `verified_same_locality` | Both spellings resolve uniquely to the **same local reference entry** (either a curated alias or the same GeoNames ID) | That the archival person is the GEDCOM person, or that the source's birthplace is accurate |
+| `ambiguous_historical_alias` | Multiple location entries remain possible and at least one reference ID overlaps; a shared locality **might** explain the difference | That the spellings necessarily refer to the same historical place |
+| `different_locality` | Both names resolve uniquely to **different entries from the same reference authority** | That the people differ; transcriptions, movements, historical administrative context and source errors still require review |
+| `unresolved_locality` | There is no sufficient evidence in the local index to establish sameness or difference, including missing entries, nonoverlapping ambiguous names, and cross-authority IDs | That the places are the same, different, or geographically remote |
+
+Only matched *unique reference identifiers* count as a verified local resolution. Accents and city district suffixes follow the existing matching normalization, but similar spelling, geographic proximity, and a common name **never** create an alias automatically. Cross-authority comparisons (e.g. `reviewed:` versus a different `geonames:` ID) remain unresolved because their identifiers cannot simply be compared. Country hints disambiguate only when they identify a single index entry. The `resolution_basis` field distinguishes curated aliases from a unique gazetteer entry, so you can independently verify the historical spelling.
+
+`--consistency-only`, `--review-only`, `--shortlist-only`, `--rescore-only` and executed scan persistence also refresh the two place reports. `--place-conflicts-output PATH` and `--place-summary-output PATH` select custom destinations, guarded against overwriting existing source/report files. Re-running `--place-conflicts-only` with an original unrescored candidate may still show an apparent alias conflict from stale evidence; the command warns if scoring drift is detected. If you confirm a new alias independently, update the reviewed alias table and **rescore separately**. **The audit never adds aliases, changes scoring, resolves identity or deletes candidates automatically.**
 
 ## Coverage is not archival completeness
 
