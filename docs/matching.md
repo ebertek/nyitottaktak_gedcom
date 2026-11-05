@@ -62,6 +62,6 @@ A record must match the name sufficiently to be considered. The code combines an
 
 Conflicting dates, mothers and birthplaces reduce the score; missing fields do not count as matching evidence. Scores are limited to **0–100**, with candidate rows retained by default from **35** upward.
 
-Review categories are based on the heuristic score: **strong ≥85**, **possible ≥60**, and **weak 35–59**. A score of 100 means high agreement among available fields, **not** confirmation of the person's historical role or of the authenticity of an archive entry.
+Review categories based on the existing heuristic score remain **strong ≥85**, **possible ≥60**, and **weak 35–59**. Separately, the grouped review report computes a **field-evidence classification** that distinguishes exact corroboration, partial agreement, name-only results, missing comparisons, and contradictions independently of the numeric score. See [evidence classifications](reports.md#evidence-based-review-classifications). A score of 100 means high agreement among available fields, **not** confirmation of the person's historical role or of the authenticity of an archive entry.
 
 A name-only hit can score 45 despite having no other useful identifiers. Review original documents and seek independent corroboration. More information is in [reports and interpretation](reports.md).
