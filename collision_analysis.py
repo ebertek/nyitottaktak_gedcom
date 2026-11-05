@@ -13,6 +13,7 @@ from pathlib import Path
 
 from consistency_audit import birth_year
 from review_report import classify_identity_evidence
+from research_shortlist import build_shortlist_rows
 
 AGGREGATE_FIELDS = [
     "archive_record_type",
@@ -211,6 +212,26 @@ def build_collision_triage(candidates: list[dict]) -> list[dict]:
         item["archive_guid"],
     ))
     return result
+
+
+def summarize_selected_p5_conflicts(candidates: list[dict]) -> dict[str, int]:
+    """Aggregate selected P5 identifiers without exposing names, IDs or URLs.
+
+    The selected lead is determined independently for each GEDCOM person by
+    the existing evidence-ranking rules. Counts are non-exclusive: one person
+    may disagree on multiple identifiers. Alternative candidate disagreements
+    do not become the selected lead's conflicts.
+    """
+    selected = [
+        row for row in build_shortlist_rows(candidates)
+        if row["research_priority"] == "P5"
+    ]
+    return {
+        "relatives": len(selected),
+        "birth_date": sum(row["p5_conflict_birth_date"] == "yes" for row in selected),
+        "mother": sum(row["p5_conflict_mother"] == "yes" for row in selected),
+        "birthplace": sum(row["p5_conflict_birthplace"] == "yes" for row in selected),
+    }
 
 
 def _write(target: Path, fields: list[str], rows: list[dict]) -> None:
