@@ -1544,23 +1544,39 @@ def main() -> None:
         coverage = args.review_coverage_input or source.with_suffix(".coverage.csv")
         consistency_path = args.consistency_output or source.with_suffix(".consistency.csv")
         shared_path = args.shared_records_output or source.with_suffix(".shared-records.csv")
+        collision_summary = (
+            args.collision_summary_output or source.with_suffix(".collision-summary.csv")
+        )
+        collision_triage = (
+            args.collision_triage_output or source.with_suffix(".collision-triage.csv")
+        )
         protected = (
             source, coverage, source.with_suffix(".review.csv"),
             source.with_suffix(".shortlist.csv"), source.with_suffix(".checkpoint.json"),
             source.with_suffix(".audit.csv"), source.with_suffix(".quality.csv"),
-            consistency_path, shared_path,
+            consistency_path, shared_path, collision_summary, collision_triage,
         )
         if len({p.resolve() for p in protected}) != len(protected):
-            parser.error("Consistency output would overwrite a source or existing report")
+            parser.error("Consistency/collision output would overwrite a source or existing report")
         try:
             candidates = read_csv(source)
             flagged, shared, categories = write_consistency_reports(
                 candidates, consistency_path, shared_path
             )
+            group_rows, profiles = write_collision_reports(
+                candidates, collision_summary, collision_triage
+            )
         except ValueError as exc:
             parser.error(str(exc))
         print(f"Offline consistency audit: {flagged} flagged candidate rows; "
               f"{shared} shared archive GUIDs -> {consistency_path}, {shared_path}")
+        print(f"Collision evidence: {group_rows} source/class groups -> {collision_summary}")
+        print("Shared-GUID profiles: " + ", ".join(
+            f"{label}={profiles[label]}" for label in (
+                "name_only_collision", "corroborated_lead_present",
+                "other_ambiguous_collision"
+            )
+        ) + f" -> {collision_triage}")
         if categories:
             print("Chronology review flags: " + ", ".join(
                 f"{key}={categories[key]}" for key in sorted(categories)
