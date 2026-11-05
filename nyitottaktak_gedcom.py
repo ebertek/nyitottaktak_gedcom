@@ -30,6 +30,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from review_report import review_files, write_review_report
+from research_shortlist import shortlist_files, write_shortlist_report
 from quality_report import write_quality_report
 from hungarian_places import PlaceResolver
 from scripts.build_place_index import ensure_default_index
@@ -1009,10 +1010,15 @@ def run(args: argparse.Namespace) -> None:
         write_report(args.output, columns, completed)
         write_coverage_report(coverage_path, eligible, completed)
         review_path = getattr(args, "review_output", None) or args.output.with_suffix(".review.csv")
-        write_review_report(
-            review_path,
-            [row for entry in completed.values() for row in entry.get("rows", [])],
-            coverage_rows(eligible, completed),
+        candidate_rows = [
+            row for entry in completed.values() for row in entry.get("rows", [])
+        ]
+        search_coverage = coverage_rows(eligible, completed)
+        write_review_report(review_path, candidate_rows, search_coverage)
+        write_shortlist_report(
+            args.shortlist_output or args.output.with_suffix(".shortlist.csv"),
+            candidate_rows, search_coverage,
+            include_name_only=args.shortlist_include_name_only,
         )
 
     for index, person in enumerate(eligible, 1):
@@ -1313,10 +1319,12 @@ def choose_default_output(args: argparse.Namespace, argv: list[str]) -> None:
     if explicit_output or args.output != DEFAULT_OUTPUT:
         return
     if args.review_input is not None and (
-            args.review_only or args.rescore_only or args.quality_only):
+            args.review_only or args.rescore_only or args.quality_only
+            or args.shortlist_only):
         return
 
-    offline_report = args.review_only or args.rescore_only or args.quality_only
+    offline_report = (args.review_only or args.rescore_only or
+                      args.quality_only or args.shortlist_only)
     coverage = args.coverage_only
     legacy_exists = (LEGACY_DEFAULT_OUTPUT.exists() if offline_report else
                      LEGACY_DEFAULT_OUTPUT.with_suffix(".checkpoint.json").exists())
@@ -1386,7 +1394,14 @@ def main() -> None:
     parser.add_argument("--quality-output", type=Path, default=None,
                         help="Aggregate quality CSV (default: candidate CSV with .quality.csv suffix)")
     parser.add_argument("--review-only", action="store_true",
-                        help="Build grouped candidate review from local CSVs without GEDCOM or network")
+                        help="Build grouped candidate review and research shortlist from local CSVs, offline")
+    parser.add_argument("--shortlist-only", action="store_true",
+                        help="Build evidence-prioritized research shortlist from saved candidates; "
+                             "excludes name-only leads by default; offline and GEDCOM-free")
+    parser.add_argument("--shortlist-output", type=Path, default=None,
+                        help="Research shortlist CSV (default: candidate CSV with .shortlist.csv suffix)")
+    parser.add_argument("--shortlist-include-name-only", action="store_true",
+                        help="Include deferred name-only leads in research shortlist")
     parser.add_argument("--review-input", type=Path, default=None,
                         help="Candidate CSV for --review-only (default: --output)")
     parser.add_argument("--review-coverage-input", type=Path, default=None,
@@ -1418,7 +1433,8 @@ def main() -> None:
             place_index = candidate_index
         elif (args.execute and not args.no_auto_place_index and
               not (args.check_updates or args.rescore_only or
-                   args.review_only or args.coverage_only or args.quality_only)):
+                   args.review_only or args.coverage_only or args.quality_only
+                   or args.shortlist_only)):
             # Only actual archive scans can download additional data. Preview
             # and offline/metadata-only commands preserve their no-GeoNames
             # network guarantees. Check inputs before starting a download.
@@ -1480,6 +1496,25 @@ def main() -> None:
             print("NOTE: Coverage CSV missing; the review omits unsearched people.")
         print("NOTE: This only re-scores existing candidate records; it cannot recover previously discarded matches.")
         return
+    if args.shortlist_only:
+        source = args.review_input or args.output
+        coverage = args.review_coverage_input or source.with_suffix(".coverage.csv")
+        target = args.shortlist_output or source.with_suffix(".shortlist.csv")
+        try:
+            count, priorities, has_coverage = shortlist_files(
+                source, coverage, target,
+                include_name_only=args.shortlist_include_name_only,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(f"Offline research shortlist: {count} relatives -> {target}")
+        print("Priorities: " + ", ".join(
+            f"{key}={priorities[key]}" for key in sorted(priorities)
+        ) if priorities else "Priorities: no actionable leads")
+        if not has_coverage:
+            print("NOTE: Coverage CSV absent; search completion is not reported.")
+        print("NOTE: These are unverified identity leads, not evidence of collaboration.")
+        return
     if args.review_only:
         source = args.review_input or args.output
         coverage = args.review_coverage_input or source.with_suffix(".coverage.csv")
@@ -1490,6 +1525,19 @@ def main() -> None:
             parser.error(str(exc))
         print(f"Offline identity review: {people} relatives, "
               f"{sum(counts.values())} grouped rows -> {target}")
+        shortlist_target = args.shortlist_output or source.with_suffix(".shortlist.csv")
+        try:
+            shortlist_count, priorities, _ = shortlist_files(
+                source, coverage, shortlist_target,
+                include_name_only=args.shortlist_include_name_only,
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(f"Offline research shortlist: {shortlist_count} relatives -> {shortlist_target}")
+        if priorities:
+            print("Priorities: " + ", ".join(
+                f"{key}={priorities[key]}" for key in sorted(priorities)
+            ))
         if not has_coverage:
             print(f"NOTE: No coverage report found at {coverage}; "
                   "unsearched individuals cannot be included.")
