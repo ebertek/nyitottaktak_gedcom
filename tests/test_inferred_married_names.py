@@ -87,6 +87,17 @@ class InferredMarriedNameTests(unittest.TestCase):
         self.gedcom.write_text(GEDCOM, encoding="utf-8")
         self.people, self.families = finder.read_gedcom(self.gedcom)
 
+    def test_repeated_names_and_alt_spelling_stay_distinct(self):
+        person = finder.Person("I99", names=[
+            ("Dávid /Bükkösi/", ""),
+            ("Dávid /Bükkösi/", ""),
+            ("David /Bukkosi/", ""),
+        ])
+        self.assertEqual(
+            finder.candidate_names(person),
+            ["Bükkösi Dávid", "Bukkosi David"],
+        )
+
     def test_family_members_and_marriage_are_read(self):
         person = self.people["I1"]
         self.assertEqual(person.spouse_families, ["F1", "F2", "F3"])
