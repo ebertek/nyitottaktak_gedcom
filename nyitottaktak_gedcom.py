@@ -30,6 +30,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from review_report import review_files, write_review_report
+from quality_report import write_quality_report
 from hungarian_places import PlaceResolver
 from scripts.build_place_index import ensure_default_index
 
@@ -1337,6 +1338,11 @@ def main() -> None:
                              "use built-in aliases if no local index exists")
     parser.add_argument("--rescore-only", action="store_true",
                         help="Recalculate existing candidate scores offline into a separate CSV; no GEDCOM or API calls")
+    parser.add_argument("--quality-only", action="store_true",
+                        help="Summarize archive field completeness and identity evidence "
+                             "per source from saved candidates; offline and GEDCOM-free")
+    parser.add_argument("--quality-output", type=Path, default=None,
+                        help="Aggregate quality CSV (default: candidate CSV with .quality.csv suffix)")
     parser.add_argument("--review-only", action="store_true",
                         help="Build grouped candidate review from local CSVs without GEDCOM or network")
     parser.add_argument("--review-input", type=Path, default=None,
@@ -1369,7 +1375,7 @@ def main() -> None:
             place_index = candidate_index
         elif (args.execute and not args.no_auto_place_index and
               not (args.check_updates or args.rescore_only or
-                   args.review_only or args.coverage_only)):
+                   args.review_only or args.coverage_only or args.quality_only)):
             # Only actual archive scans can download additional data. Preview
             # and offline/metadata-only commands preserve their no-GeoNames
             # network guarantees. Check inputs before starting a download.
@@ -1395,6 +1401,25 @@ def main() -> None:
             check_archive_update(client, args.cache_dir, required=True)
         except ValueError as exc:
             parser.error(str(exc))
+        return
+    if args.quality_only:
+        source = args.review_input or args.output
+        target = args.quality_output or source.with_suffix(".quality.csv")
+        try:
+            aggregates = write_quality_report(source, target)
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(f"Offline quality: {len(aggregates)} aggregate rows -> {target}")
+        if aggregates:
+            print("Archive source | candidates | distinct archive records | "
+                  "birth % | birthplace % | mother % | name-only candidates")
+            for item in aggregates:
+                print(f"{item['archive_record_type']} | {item['candidate_rows']} | "
+                      f"{item['distinct_archive_records']} | "
+                      f"{item['archive_birth_pct']} | {item['archive_birth_place_pct']} | "
+                      f"{item['archive_mother_pct']} | {item['candidate_name_only']}")
+        print("NOTE: Only records retained in the existing candidate CSV are measured; "
+              "this is NOT completeness of the full archive or proof of identity.")
         return
     if args.rescore_only:
         source = args.review_input or args.output
