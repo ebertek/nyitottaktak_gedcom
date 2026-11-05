@@ -93,12 +93,15 @@ python nyitottaktak_gedcom.py --rescore-only
 # Summarize field availability and identity corroboration per archive source
 python nyitottaktak_gedcom.py --quality-only
 
+# Prioritize research tasks from existing candidates (no GEDCOM or archive API)
+python nyitottaktak_gedcom.py --shortlist-only
+
 # Rebuild coverage from the GEDCOM and its matching checkpoint (offline)
 python nyitottaktak_gedcom.py 'Family Tree.ged' \
   --all --exhaustive --coverage-only
 ```
 
-`--review-input`, `--review-coverage-input` and `--review-output` select review files. `--output` changes the candidate CSV and derived report/checkpoint paths. The quality command writes a separate aggregate-only CSV; use `--review-input` and `--quality-output` to select its input/output. See [reports and interpretation](reports.md).
+`--review-input`, `--review-coverage-input` and `--review-output` select review files. `--output` changes the candidate CSV and derived report/checkpoint paths. The quality command writes a separate aggregate-only CSV; use `--review-input` and `--quality-output` to select its input/output. Offline `--review-only` also creates `*.shortlist.csv` with one best-evidence lead per person (excluding name-only by default); `--shortlist-only` regenerates just that CSV, `--shortlist-include-name-only` includes deferred leads, and `--shortlist-output` selects a custom destination. See [reports and interpretation](reports.md).
 
 ## Birthplace gazetteer
 
