@@ -9,7 +9,8 @@ With the default `--output results/nyitottaktak_matches.csv`, these files are wr
 | File | Purpose |
 | --- | --- |
 | `results/nyitottaktak_matches.csv` | One row per retained person–archive candidate, with matching fields, score, source type and document URL |
-| `results/nyitottaktak_matches.review.csv` | One row per GEDCOM person for manual review, incorporating missing or conflicting identity evidence |
+| `results/nyitottaktak_matches.review.csv` | One row per GEDCOM person, with highest-score and best-evidence leads shown separately |
+| `results/nyitottaktak_matches.shortlist.csv` | Research queue: best evidence-based candidate per person, omitting name-only and no-lead cases by default |
 | `results/nyitottaktak_matches.coverage.csv` | One row per selected person with search-completion status and warnings |
 | `results/nyitottaktak_matches.checkpoint.json` | Completed searches and their saved candidate rows, for safe resumption |
 | `results/nyitottaktak_matches.errors.txt` | Reported query errors/limitations, if any |
@@ -67,6 +68,37 @@ Rebuild the grouped report offline:
 ```bash
 python nyitottaktak_gedcom.py --review-only
 ```
+
+## Prioritized research shortlist
+
+The grouped `*.review.csv` now includes **both** the highest numerical score (`top_*`) and an independently selected `best_evidence_*` candidate. The latter uses the identity-evidence classes above: exact independent corroboration is preferred to partial corroboration, missing family-tree details, unresolved comparisons, and conflicts. A name-only match is last. Scores are used only as a **tie-breaker within a comparable evidence class**; documented names are preferred to hypothetical inferred married names at equal corroboration strength.
+
+Each run also writes `*.shortlist.csv`, with one best-evidence lead per GEDCOM relative:
+
+- `P1` — **verify corroboration:** two or more exact independent identifiers match, with no conflicts
+- `P2` — **seek second identifier:** one or more exact/partial identifiers agree, but not enough for P1
+- `P3` — **enrich family tree:** archived identity details are missing from the GEDCOM
+- `P4` — **inspect unresolved evidence:** fields are present, but comparability cannot be established
+- `P5` — **resolve identity conflict:** one or more compared identifiers disagree; investigate, rather than assume a match
+- `P6` — **defer name-only:** available archive details contain no independent identifiers; **excluded by default**
+
+The `gedcom_missing_identifiers` field lists missing birth date, birthplace and mother's birth name in the GEDCOM, even when an archive record doesn't supply them. `missing_gedcom_for_selected_record` lists the subset that can be compared against the chosen archive lead. Columns also preserve the selected document URL, score, source type, agreement/contradiction, whether it differs from the highest-score lead, optional marriage-name inference provenance, total candidate counts and scan coverage. The report **never combines data from separate archive records to create corroboration**.
+
+To regenerate both reports from saved candidates with no GEDCOM/API access:
+
+```bash
+python nyitottaktak_gedcom.py --review-only
+```
+
+To update only the shortlist, or include deferred name-only leads:
+
+```bash
+python nyitottaktak_gedcom.py --shortlist-only
+
+python nyitottaktak_gedcom.py --shortlist-only --shortlist-include-name-only
+```
+
+For an alternate saved scan, use `--review-input results/married_name_matches.csv` with either option. Use `--shortlist-output PATH` to choose the destination. Existing input candidates and checkpoints are not modified; `--review-only` also regenerates its existing grouped review CSV. The shortlist is a **workflow queue, not an identity confidence probability** or a finding of involvement in state-security activities. Name-only and zero-lead relatives remain visible in the original candidate and grouped review reports.
 
 ## Coverage is not archival completeness
 
