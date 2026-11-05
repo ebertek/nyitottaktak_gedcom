@@ -159,10 +159,30 @@ def build_birthplace_conflicts(
     return output
 
 
+def _source_category(raw: object) -> str:
+    """Use only bounded, known source categories in identifier-free reports.
+
+    Raw upstream record-type text is retained only in the private report.
+    Unknown arbitrary strings must not unexpectedly expose personal text.
+    """
+    name = key(str(raw or ""))
+    if "6 os karton" in name:
+        return "6-os karton"
+    if "b naplo" in name:
+        return "B napló"
+    if "b dosszie" in name:
+        return "B-dosszié"
+    if "magnesszalag" in name:
+        return "Mágnesszalag"
+    if "h adattar" in name:
+        return "H-adattár"
+    return "(other/unreported)"
+
+
 def build_birthplace_summary(details: list[dict]) -> list[dict]:
-    """Aggregate by source/status, excluding names, GUIDs and locality names."""
+    """Aggregate by safe source categories/status, no names, IDs, or places."""
     totals = Counter(
-        (str(row.get("archive_record_type") or "").strip() or "(unreported)",
+        (_source_category(row.get("archive_record_type")),
          row["place_assessment"])
         for row in details
     )
