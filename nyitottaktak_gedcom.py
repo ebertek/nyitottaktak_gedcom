@@ -1016,9 +1016,10 @@ def run(args: argparse.Namespace) -> None:
         search_coverage = coverage_rows(eligible, completed)
         write_review_report(review_path, candidate_rows, search_coverage)
         write_shortlist_report(
-            args.shortlist_output or args.output.with_suffix(".shortlist.csv"),
+            getattr(args, "shortlist_output", None) or
+            args.output.with_suffix(".shortlist.csv"),
             candidate_rows, search_coverage,
-            include_name_only=args.shortlist_include_name_only,
+            include_name_only=getattr(args, "shortlist_include_name_only", False),
         )
 
     for index, person in enumerate(eligible, 1):
@@ -1320,11 +1321,11 @@ def choose_default_output(args: argparse.Namespace, argv: list[str]) -> None:
         return
     if args.review_input is not None and (
             args.review_only or args.rescore_only or args.quality_only
-            or args.shortlist_only):
+            or getattr(args, "shortlist_only", False)):
         return
 
     offline_report = (args.review_only or args.rescore_only or
-                      args.quality_only or args.shortlist_only)
+                      args.quality_only or getattr(args, "shortlist_only", False))
     coverage = args.coverage_only
     legacy_exists = (LEGACY_DEFAULT_OUTPUT.exists() if offline_report else
                      LEGACY_DEFAULT_OUTPUT.with_suffix(".checkpoint.json").exists())
