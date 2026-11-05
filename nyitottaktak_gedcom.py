@@ -34,6 +34,7 @@ from research_shortlist import shortlist_files, write_shortlist_report
 from score_audit import audit_candidate_file, write_audit_report
 from consistency_audit import write_consistency_reports
 from collision_analysis import summarize_selected_p5_conflicts, write_collision_reports
+from birthplace_audit import ASSESSMENTS, write_birthplace_reports
 from quality_report import write_quality_report
 from hungarian_places import PlaceResolver
 from scripts.build_place_index import ensure_default_index
@@ -946,11 +947,16 @@ def run(args: argparse.Namespace) -> None:
                               args.output.with_suffix(".collision-summary.csv"))
     collision_triage_path = (getattr(args, "collision_triage_output", None) or
                              args.output.with_suffix(".collision-triage.csv"))
+    place_detail_path = (getattr(args, "place_conflicts_output", None) or
+                         args.output.with_suffix(".place-conflicts.csv"))
+    place_summary_path = (getattr(args, "place_summary_output", None) or
+                          args.output.with_suffix(".place-summary.csv"))
     protected_paths = (
         args.output, coverage_path, review_path,
         getattr(args, "checkpoint", None) or args.output.with_suffix(".checkpoint.json"),
         shortlist_path, consistency_path, shared_path,
         collision_summary_path, collision_triage_path,
+        place_detail_path, place_summary_path,
     )
     if len({path.resolve() for path in protected_paths}) != len(protected_paths):
         raise ValueError("Report outputs must not overwrite candidates, coverage, "
@@ -1045,6 +1051,10 @@ def run(args: argparse.Namespace) -> None:
         write_consistency_reports(candidate_rows, consistency_path, shared_path)
         write_collision_reports(
             candidate_rows, collision_summary_path, collision_triage_path
+        )
+        write_birthplace_reports(
+            candidate_rows, PLACE_RESOLVER, normalized_place_input,
+            place_detail_path, place_summary_path,
         )
 
     for index, person in enumerate(eligible, 1):
@@ -1381,13 +1391,15 @@ def choose_default_output(args: argparse.Namespace, argv: list[str]) -> None:
             args.review_only or args.rescore_only or args.quality_only
             or getattr(args, "shortlist_only", False)
             or getattr(args, "audit_only", False)
-            or getattr(args, "consistency_only", False)):
+            or getattr(args, "consistency_only", False)
+            or getattr(args, "place_conflicts_only", False)):
         return
 
     offline_report = (args.review_only or args.rescore_only or
                       args.quality_only or getattr(args, "shortlist_only", False)
                       or getattr(args, "audit_only", False)
-                      or getattr(args, "consistency_only", False))
+                      or getattr(args, "consistency_only", False)
+                      or getattr(args, "place_conflicts_only", False))
     coverage = args.coverage_only
     legacy_exists = (LEGACY_DEFAULT_OUTPUT.exists() if offline_report else
                      LEGACY_DEFAULT_OUTPUT.with_suffix(".checkpoint.json").exists())
@@ -1466,6 +1478,12 @@ def main() -> None:
                         help="Source/evidence collision aggregates (default: *.collision-summary.csv)")
     parser.add_argument("--collision-triage-output", type=Path, default=None,
                         help="Private shared-GUID evidence profiles (default: *.collision-triage.csv)")
+    parser.add_argument("--place-conflicts-only", action="store_true",
+                        help="Audit selected P5 birthplace conflicts against local place references offline")
+    parser.add_argument("--place-conflicts-output", type=Path, default=None,
+                        help="Private P5 birthplace pair review (default: *.place-conflicts.csv)")
+    parser.add_argument("--place-summary-output", type=Path, default=None,
+                        help="Aggregate birthplace reconciliation counts (default: *.place-summary.csv)")
     parser.add_argument("--quality-only", action="store_true",
                         help="Summarize archive field completeness and identity evidence "
                              "per source from saved candidates; offline and GEDCOM-free")
@@ -1512,7 +1530,8 @@ def main() -> None:
         elif (args.execute and not args.no_auto_place_index and
               not (args.check_updates or args.rescore_only or
                    args.review_only or args.coverage_only or args.quality_only
-                   or args.shortlist_only or args.audit_only or args.consistency_only)):
+                   or args.shortlist_only or args.audit_only or args.consistency_only
+                   or args.place_conflicts_only)):
             # Only actual archive scans can download additional data. Preview
             # and offline/metadata-only commands preserve their no-GeoNames
             # network guarantees. Check inputs before starting a download.
