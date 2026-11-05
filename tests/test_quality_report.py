@@ -106,7 +106,9 @@ class QualityReportTests(unittest.TestCase):
         self.assertEqual(total["candidate_rows"], 7)
         self.assertEqual(total["distinct_archive_records"], 5)
         self.assertEqual(total["distinct_gedcom_people"], 7)
-        self.assertEqual(total["candidate_name_only"], 4)
+        # One additional duplicate-card candidate has only its name,
+        # even though the shared archive GUID has fuller fields elsewhere.
+        self.assertEqual(total["candidate_name_only"], 5)
 
     def test_same_guid_in_different_source_is_not_merged(self):
         rows = [
