@@ -1689,8 +1689,15 @@ def main() -> None:
         target = args.shortlist_output or source.with_suffix(".shortlist.csv")
         consistency_target = args.consistency_output or source.with_suffix(".consistency.csv")
         shared_target = args.shared_records_output or source.with_suffix(".shared-records.csv")
+        collision_summary = (
+            args.collision_summary_output or source.with_suffix(".collision-summary.csv")
+        )
+        collision_triage = (
+            args.collision_triage_output or source.with_suffix(".collision-triage.csv")
+        )
         protected = (
             source, coverage, target, consistency_target, shared_target,
+            collision_summary, collision_triage,
             source.with_suffix(".review.csv"), source.with_suffix(".checkpoint.json"),
         )
         if len({p.resolve() for p in protected}) != len(protected):
@@ -1703,12 +1710,19 @@ def main() -> None:
             )
         except ValueError as exc:
             parser.error(str(exc))
+        candidate_rows = read_csv(source)
         flagged, shared, _ = write_consistency_reports(
-            read_csv(source), consistency_target, shared_target
+            candidate_rows, consistency_target, shared_target
+        )
+        collision_groups, collision_types = write_collision_reports(
+            candidate_rows, collision_summary, collision_triage
         )
         print(f"Offline research shortlist: {count} relatives -> {target}")
         print(f"Consistency audit: {flagged} flagged rows; {shared} shared GUIDs "
               f"-> {consistency_target}, {shared_target}")
+        print(f"Collision evidence: {collision_groups} source/class groups; "
+              f"{sum(collision_types.values())} shared GUIDs "
+              f"-> {collision_summary}, {collision_triage}")
         print("Priorities: " + ", ".join(
             f"{key}={priorities[key]}" for key in sorted(priorities)
         ) if priorities else "Priorities: no actionable leads")
