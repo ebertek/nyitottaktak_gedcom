@@ -124,6 +124,27 @@ To prebuild it or prepare an index before running offline reports:
 python scripts/build_place_index.py --download
 ```
 
+**After updating the place-index builder, explicitly rebuild your existing cached
+index**: ordinary scans and offline reports **reuse** the existing
+`.nyitottaktak_cache/hungarian_places.csv` without rebuilding it. The command
+above is safe to repeat: it reuses previously downloaded country ZIPs when
+available, recreates the CSV, and does not read GEDCOM or access the archive.
+This is especially useful before re-running birthplace reconciliation on
+`results/nyitottaktak_matches.rescored.csv`:
+
+```bash
+python scripts/build_place_index.py --download
+python nyitottaktak_gedcom.py --place-conflicts-only \
+  --review-input results/nyitottaktak_matches.rescored.csv
+```
+
+The builder now indexes populated settlements in **Hungary (HU)** under their
+GeoNames native spelling even when GeoNames lacks a separate `hu` alternate
+name. It still requires an explicit Hungarian-language alias for settlements
+**outside Hungary**, and ambiguous spellings remain ambiguous. This improves
+locality *coverage*, not evidence of an individual's identity. Rebuilding the
+index does not itself rescore saved candidate rows.
+
 `--world --download` builds a much larger worldwide index instead. `--place-index PATH` selects a custom index. `--no-auto-place-index` skips first-run setup and uses built-in examples when no index exists. An index cannot guarantee every historical name. See [name and birthplace matching](matching.md).
 
 Use `python nyitottaktak_gedcom.py --help` for the complete argument list.
