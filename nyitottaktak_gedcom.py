@@ -20,6 +20,7 @@ import shutil
 import sys
 import time
 import unicodedata
+import zipfile
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from difflib import SequenceMatcher
@@ -30,6 +31,7 @@ from urllib.request import Request, urlopen
 
 from review_report import review_files, write_review_report
 from hungarian_places import PlaceResolver
+from scripts.build_place_index import ensure_default_index
 
 API = "https://nyitottaktak.hu/api/search"
 API_META = "https://nyitottaktak.hu/api/meta"
@@ -1180,8 +1182,10 @@ def main() -> None:
     parser.add_argument("--cache-dir", type=Path, default=Path(".nyitottaktak_cache"))
     parser.add_argument("--refresh", action="store_true", help="Refresh cached API responses")
     parser.add_argument("--place-index", type=Path, default=None,
-                        help="Optional locally built Hungarian GeoNames CSV; defaults to "
-                             "<cache-dir>/hungarian_places.csv when it exists")
+                        help="Custom local Hungarian place index CSV (overrides automatic default)")
+    parser.add_argument("--no-auto-place-index", action="store_true",
+                        help="Skip automatic GeoNames download on first executed scan; "
+                             "use built-in aliases if no local index exists")
     parser.add_argument("--rescore-only", action="store_true",
                         help="Recalculate existing candidate scores offline into a separate CSV; no GEDCOM or API calls")
     parser.add_argument("--review-only", action="store_true",
@@ -1214,9 +1218,25 @@ def main() -> None:
         candidate_index = args.cache_dir / "hungarian_places.csv"
         if candidate_index.is_file():
             place_index = candidate_index
+        elif (args.execute and not args.no_auto_place_index and
+              not (args.check_updates or args.rescore_only or
+                   args.review_only or args.coverage_only)):
+            # Only actual archive scans can download additional data. Preview
+            # and offline/metadata-only commands preserve their no-GeoNames
+            # network guarantees. Check inputs before starting a download.
+            if args.gedcom is None or not args.gedcom.is_file():
+                parser.error(f"GEDCOM file not found: {args.gedcom}")
+            try:
+                place_index = ensure_default_index(args.cache_dir)
+            except (OSError, URLError, ValueError, zipfile.BadZipFile) as exc:
+                parser.error(
+                    "Automatic Hungarian place index setup failed: "
+                    f"{exc}. Retry, or use --no-auto-place-index to search "
+                    "with built-in place aliases only."
+                )
     try:
         PLACE_RESOLVER = PlaceResolver(place_index)
-    except ValueError as exc:
+    except (ValueError, OSError, csv.Error) as exc:
         parser.error(str(exc))
     if place_index is not None:
         print(f"Hungarian place index: {place_index}")
