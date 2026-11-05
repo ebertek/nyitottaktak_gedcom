@@ -175,6 +175,7 @@ class AuditCliTests(unittest.TestCase):
         self.assertIn("1 scores changed", message)
         rescored = self.root / "fictional.rescored.csv"
         self.assertTrue(rescored.exists())
+        self.assertTrue(self.root.joinpath("fictional.rescored.shortlist.csv").exists())
         message = self.invoke("--shortlist-only", "--review-input", str(rescored),
                               "--review-coverage-input", str(self.coverage))
         self.assertNotIn("WARNING: Stored evidence differs", message)
