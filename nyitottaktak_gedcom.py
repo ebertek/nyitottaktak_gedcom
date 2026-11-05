@@ -29,6 +29,7 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from review_report import review_files, write_review_report
+from hungarian_places import PlaceResolver
 
 API = "https://nyitottaktak.hu/api/search"
 API_META = "https://nyitottaktak.hu/api/meta"
@@ -264,14 +265,18 @@ def city_name(value: str) -> str:
 # A small explicit alias table avoids treating unrelated nearby towns as one.
 # Historical Hungarian and present-day Serbian names of the same locality.
 # Other differences in Hungarian accents already normalize via norm().
-PLACE_ALIASES = {"subotica": "szabadka", "szabadka": "szabadka"}
-PREFERRED_API_PLACES = {"subotica": "Szabadka"}
+PLACE_RESOLVER = PlaceResolver()
+
+
+def normalized_place_input(value: str) -> str:
+    """Remove district notation without losing historic country context."""
+    city = city_name(value)
+    return city + ("," + value.split(",", 1)[1] if "," in value else "")
 
 
 def normalized_city(value: str) -> str:
-    """Canonical locality for identity scoring; never changes CSV source text."""
-    normalized = norm(city_name(value))
-    return PLACE_ALIASES.get(normalized, normalized)
+    """Canonical named locality, with verified Hungarian exonyms when known."""
+    return norm(PLACE_RESOLVER.preferred_hungarian(normalized_place_input(value)))
 
 
 def clean_api_text(value: str, field_name: str) -> str:
@@ -294,9 +299,8 @@ def clean_api_text(value: str, field_name: str) -> str:
 
 def api_place(value: str) -> str:
     """Use city-level Hungarian archive names for known historical aliases."""
-    city = city_name(value)
-    city = PREFERRED_API_PLACES.get(norm(city), city)
-    return clean_api_text(city, "szul_hely")
+    localized_city = PLACE_RESOLVER.preferred_hungarian(normalized_place_input(value))
+    return clean_api_text(localized_city, "szul_hely")
 
 
 def api_name(value: str, field_name: str = "nev") -> str:
@@ -384,7 +388,9 @@ def score(person: Person, archive: dict, names: list[str], mothers: list[str]) -
     ged_place = normalized_city(person.birthplace)
     archive_place = normalized_city(str(archive.get("szul_hely") or ""))
     if ged_place and archive_place:
-        if ged_place == archive_place:
+        if ged_place == archive_place or PLACE_RESOLVER.equivalent(
+                normalized_place_input(person.birthplace),
+                normalized_place_input(str(archive.get("szul_hely") or ""))):
             points += 10
             reasons.append("birthplace exact")
         elif ged_place in archive_place or archive_place in ged_place:
@@ -1173,6 +1179,9 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("nyitottaktak_matches.csv"))
     parser.add_argument("--cache-dir", type=Path, default=Path(".nyitottaktak_cache"))
     parser.add_argument("--refresh", action="store_true", help="Refresh cached API responses")
+    parser.add_argument("--place-index", type=Path, default=None,
+                        help="Optional locally built Hungarian GeoNames CSV; defaults to "
+                             "<cache-dir>/hungarian_places.csv when it exists")
     parser.add_argument("--rescore-only", action="store_true",
                         help="Recalculate existing candidate scores offline into a separate CSV; no GEDCOM or API calls")
     parser.add_argument("--review-only", action="store_true",
@@ -1199,6 +1208,18 @@ def main() -> None:
     if (args.delay < 0.5 or args.max_people < 0 or args.max_requests < 0 or
             args.min_score < 0 or args.year_tolerance < 0):
         parser.error("Use --delay >= 0.5, nonnegative budgets (0 = unlimited), score and tolerance")
+    global PLACE_RESOLVER
+    place_index = args.place_index
+    if place_index is None:
+        candidate_index = args.cache_dir / "hungarian_places.csv"
+        if candidate_index.is_file():
+            place_index = candidate_index
+    try:
+        PLACE_RESOLVER = PlaceResolver(place_index)
+    except ValueError as exc:
+        parser.error(str(exc))
+    if place_index is not None:
+        print(f"Hungarian place index: {place_index}")
     if args.check_updates:
         try:
             client = ApiClient(args.cache_dir, args.delay, args.max_requests, False)
