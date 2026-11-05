@@ -22,6 +22,9 @@ python nyitottaktak_gedcom.py 'Family Tree.ged' \
 
 # Review the saved results without network access or a GEDCOM file
 python nyitottaktak_gedcom.py --review-only
+
+# Apply current identity-scoring rules to saved candidates, entirely offline
+python nyitottaktak_gedcom.py --rescore-only
 ```
 
 By default, the tool searches people born in **1850–1975** who have a usable surname and birth year. Use `--since` and `--until` to adjust the range, or `--include-undated` to include people with unknown birth years. People without surnames are skipped.
@@ -66,9 +69,11 @@ A scan checkpoints each processed relative. **Rerun the same search command to r
 
 `completed` means the configured queries finished without reported limitations—not that every historical record was found. `limited` can indicate broad (`too_many`) or rejected queries; `not_completed` means the person has not been fully processed.
 
+`--rescore-only` writes `nyitottaktak_matches.rescored.csv` and `nyitottaktak_matches.rescored.review.csv`. It does **not** contact the archive, read a GEDCOM, or modify the original matches, checkpoint, or coverage. The rescored CSV shows previous and new scores. It can only rescore **existing candidate rows**, not recover records excluded by the original score threshold.
+
 ## Search behavior
 
-The script uses names, birth dates, birthplaces and mothers' names from GEDCOM records. It prefers recorded birth names, supports structured `GIVN`/`SURN` and explicit aliases, and simplifies district-level birthplaces (for example, `Budapest XI.` → `Budapest`). It does not invent married names.
+The script uses names, birth dates, birthplaces and mothers' names from GEDCOM records. It prefers recorded birth names, supports structured `GIVN`/`SURN` and explicit aliases, and simplifies district-level birthplaces (for example, `Budapest XI.` → `Budapest`). Historical city aliases such as `Subotica`/`Szabadka` are considered equivalent, and Hungarian accent variants are normalized for scoring. It does not invent married names.
 
 Searches are sequential and cached. Defaults are **30 people**, **250 HTTP requests per invocation**, and **1.5 seconds** between uncached requests. `--all` removes the local people and request caps; `--max-people 0` or `--max-requests 0` removes them separately. The minimum delay is 0.5 seconds. Server limits such as HTTP 403/429 and `too_many` remain in effect.
 
