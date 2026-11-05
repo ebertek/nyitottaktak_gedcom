@@ -46,6 +46,17 @@ FIELDS = [
     "candidate_conflicting_identity",
     "candidate_insufficient_gedcom_data",
     "candidate_insufficient_comparable_data",
+    "best_evidence_archive_guid",
+    "best_evidence_archive_name",
+    "best_evidence_archive_record_type",
+    "best_evidence_archive_document_url",
+    "best_evidence_identity_score",
+    "best_evidence_classification",
+    "best_evidence_agreeing_identifiers",
+    "best_evidence_conflicting_identifiers",
+    "best_evidence_missing_gedcom_identifiers",
+    "best_evidence_matched_name_origin",
+    "best_evidence_is_highest_score",
 ]
 
 # Order explicitly describes *identity checking effort*, not suspected conduct.
@@ -177,6 +188,67 @@ def classify_identity_evidence(row: dict) -> dict[str, str]:
         ),
     }
 
+
+# Evidence priority is distinct from the existing numeric score and historical
+# interpretation. Conflicting candidates remain visible, but are not promoted
+# over non-conflicting leads purely because their heuristic score is higher.
+EVIDENCE_PRIORITY = {
+    "strongly_corroborated": 0,
+    "partially_corroborated": 1,
+    "insufficient_gedcom_data": 2,
+    "insufficient_comparable_data": 3,
+    "conflicting_identity": 4,
+    "name_only": 5,
+}
+
+
+def select_best_evidence(rows: list[dict]) -> tuple[dict, dict[str, str]] | None:
+    """Choose one research lead without mixing separate archive identities.
+
+    Rank by established corroboration first, then the number/strength of
+    agreeing attributes, documented name before speculative married name, and
+    only then the original numerical identity score. The highest-score lead
+    remains independently available in the review report.
+    """
+    if not rows:
+        return None
+
+    def ranking(row: dict) -> tuple:
+        assessment = classify_identity_evidence(row)
+        components = assessment["agreeing_identifiers"].split(" | ")
+        exact = sum(item.endswith(":exact") for item in components)
+        partial = sum(
+            item.endswith((":partial", ":year_only")) for item in components
+        )
+        conflicts = len(assessment["conflicting_identifiers"].split(" | ")) if (
+            assessment["conflicting_identifiers"]) else 0
+        inferred = str(row.get("matched_name_origin") or "") == "inferred_married"
+        return (
+            EVIDENCE_PRIORITY[assessment["classification"]],
+            -exact, -partial, conflicts, inferred,
+            -_int(row.get("match_score")),
+            str(row.get("archive_guid") or ""),
+            str(row.get("archive_name") or ""),
+            str(row.get("archive_record_type") or ""),
+            str(row.get("evidence") or ""),
+        )
+
+    winner = min(rows, key=ranking)
+    return winner, classify_identity_evidence(winner)
+
+
+def missing_tree_identifiers(row: dict) -> str:
+    """List missing GEDCOM identifiers, including fields absent in the archive.
+
+    This is a genealogy enrichment checklist, not proof that the field exists
+    in the source. It intentionally does not use inferred married names.
+    """
+    return " | ".join(
+        identifier for identifier, gedcom_field, _ in IDENTIFIER_COLUMNS
+        if not str(row.get(gedcom_field) or "").strip()
+    )
+
+
 def build_review_rows(candidates: list[dict], coverage: list[dict] | None = None) -> list[dict]:
     """Summarize best-scoring leads, contradictions and coverage per GEDCOM ID.
 
@@ -222,6 +294,8 @@ def build_review_rows(candidates: list[dict], coverage: list[dict] | None = None
         assessments = [classify_identity_evidence(row) for row in ordered]
         top_assessment = assessments[0] if assessments else {}
         evidence_counts = Counter(a["classification"] for a in assessments)
+        chosen = select_best_evidence(ordered)
+        best_row, best_assessment = chosen if chosen else ({}, {})
         evidence = str(top.get("evidence") or "")
         found = evidence.casefold()
         flags = []
@@ -302,6 +376,35 @@ def build_review_rows(candidates: list[dict], coverage: list[dict] | None = None
             "top_missing_gedcom_identifiers": top_assessment.get("missing_gedcom_identifiers", ""),
             **{f"candidate_{label}": evidence_counts[label]
                for label in EVIDENCE_CLASSES},
+            "best_evidence_archive_guid": str(best_row.get("archive_guid") or ""),
+            "best_evidence_archive_name": str(best_row.get("archive_name") or ""),
+            "best_evidence_archive_record_type": str(
+                best_row.get("archive_record_type") or ""
+            ),
+            "best_evidence_archive_document_url": str(
+                best_row.get("archive_document_url") or ""
+            ),
+            "best_evidence_identity_score": (
+                _int(best_row.get("match_score")) if best_row else ""
+            ),
+            "best_evidence_classification": (
+                best_assessment.get("classification") or "no_candidate_leads"
+            ),
+            "best_evidence_agreeing_identifiers": best_assessment.get(
+                "agreeing_identifiers", ""
+            ),
+            "best_evidence_conflicting_identifiers": best_assessment.get(
+                "conflicting_identifiers", ""
+            ),
+            "best_evidence_missing_gedcom_identifiers": best_assessment.get(
+                "missing_gedcom_identifiers", ""
+            ),
+            "best_evidence_matched_name_origin": str(
+                best_row.get("matched_name_origin") or ""
+            ),
+            "best_evidence_is_highest_score": (
+                "yes" if best_row is top else "no" if best_row else ""
+            ),
         })
 
     summary.sort(key=lambda row: (
