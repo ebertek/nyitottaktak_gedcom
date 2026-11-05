@@ -139,6 +139,46 @@ def build_index(sources: list[tuple[Path, Path]], output: Path) -> tuple[int, in
     return len(collected), len(sources)
 
 
+def default_country_sources(source_dir: Path) -> tuple[list[tuple[Path, Path]], list[str]]:
+    """GeoNames files for the present-day countries of historical Hungary."""
+    pairs: list[tuple[Path, Path]] = []
+    urls: list[str] = []
+    for country in DEFAULT_COUNTRIES.split(","):
+        pairs.append((
+            source_dir / "countries" / f"{country}.zip",
+            source_dir / "alternatenames" / f"{country}.zip",
+        ))
+        urls.extend([
+            f"{BASE_URL}/{country}.zip",
+            f"{BASE_URL}/alternatenames/{country}.zip",
+        ])
+    return pairs, urls
+
+
+def ensure_default_index(cache_dir: Path) -> Path:
+    """Build the default gazetteer on first online scan; reuse it thereafter.
+
+    This is intentionally *not* called by offline report, preview, or metadata
+    commands. An incomplete download never creates a misleading empty index.
+    """
+    output = cache_dir / "hungarian_places.csv"
+    if output.is_file():
+        return output
+    sources, urls = default_country_sources(cache_dir / "geonames_source")
+    print("Hungarian place index missing; downloading regional GeoNames data "
+          f"({DEFAULT_COUNTRIES}, Vojvodina under RS).")
+    for archive, url in zip(
+        (path for pair in sources for path in pair), urls
+    ):
+        download_source(url, archive)
+    count, _ = build_index(sources, output)
+    if not count:
+        output.unlink(missing_ok=True)
+        raise ValueError("GeoNames produced no Hungarian-named populated places")
+    print(f"Hungarian place index created: {count} populated places -> {output}")
+    return output
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--countries", default=DEFAULT_COUNTRIES,
