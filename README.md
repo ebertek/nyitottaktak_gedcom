@@ -52,6 +52,19 @@ python nyitottaktak_gedcom.py 'Family Tree.ged' \
 
 Use `python nyitottaktak_gedcom.py --help` for all flags.
 
+### Optional Hungarian married-name searches
+
+Use `--include-inferred-married-names` to search **possible**, not documented, Hungarian married forms from explicit GEDCOM `HUSB`/`WIFE` relationships with a `MARR` event. This supports forms based on the husband's full name, the husband's surname with `-né`, and the wife's given/birth names. Explicit `NAME` aliases still work without the flag; inferred names are **never treated as verified legal names** or used for the `anyja_neve` (mother's birth name) filter. Long inferred names that exceed the API's 25-character limit are not silently truncated.
+
+```bash
+# Use a separate output/checkpoint: inferred names change search coverage.
+python nyitottaktak_gedcom.py 'Family Tree.ged' \
+  --execute --all --exhaustive --include-inferred-married-names \
+  --output married_name_matches.csv --delay 2
+```
+
+The CSV includes `matched_name_origin` and `searched_name_origin` (`gedcom` or `inferred_married`), and the grouped review flags inferred-name leads. The option can greatly increase the number of requests, and a marriage record alone does **not** establish which married form was actually used. Regular scan checkpoints remain compatible with the default (flag-off) behavior; enabling the flag requires a different checkpoint or `--no-resume` and may requery previously completed people.
+
 ## Reports and progress
 
 Files are written beside the command unless another output path is specified:
