@@ -64,6 +64,9 @@ FIELDS = [
     "candidate_chronology_review_count",
     "candidate_shared_archive_guid_count",
     "best_evidence_archive_guid_shared_people",
+    "candidate_birth_date_conflicts",
+    "candidate_mother_conflicts",
+    "candidate_birthplace_conflicts",
 ]
 
 # Order explicitly describes *identity checking effort*, not suspected conduct.
@@ -301,6 +304,12 @@ def build_review_rows(candidates: list[dict], coverage: list[dict] | None = None
         assessments = [classify_identity_evidence(row) for row in ordered]
         top_assessment = assessments[0] if assessments else {}
         evidence_counts = Counter(a["classification"] for a in assessments)
+        conflict_counts = Counter(
+            field
+            for assessment in assessments
+            for field in assessment["conflicting_identifiers"].split(" | ")
+            if field
+        )
         chosen = select_best_evidence(ordered)
         best_row, best_assessment = chosen if chosen else ({}, {})
         top_chronology = chronology(top)["chronology_flags"] if top else ""
@@ -431,6 +440,9 @@ def build_review_rows(candidates: list[dict], coverage: list[dict] | None = None
             "best_evidence_archive_guid_shared_people": (
                 shared_best_count if shared_best_count > 1 else ""
             ),
+            "candidate_birth_date_conflicts": conflict_counts["birth_date"],
+            "candidate_mother_conflicts": conflict_counts["mother"],
+            "candidate_birthplace_conflicts": conflict_counts["birthplace"],
         })
 
     summary.sort(key=lambda row: (
