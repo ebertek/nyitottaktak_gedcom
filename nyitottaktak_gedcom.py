@@ -1541,6 +1541,7 @@ def main() -> None:
         source = args.review_input or args.output
         target = args.quality_output or source.with_suffix(".quality.csv")
         try:
+            warn_about_saved_scoring(source)
             aggregates = write_quality_report(source, target)
         except ValueError as exc:
             parser.error(str(exc))
@@ -1561,13 +1562,28 @@ def main() -> None:
         coverage = args.review_coverage_input or source.with_suffix(".coverage.csv")
         target = source.with_name(source.stem + ".rescored" + source.suffix)
         review_target = target.with_suffix(".review.csv")
+        shortlist_target = args.shortlist_output or target.with_suffix(".shortlist.csv")
+        if shortlist_target.resolve() in {p.resolve() for p in (
+                source, target, coverage, review_target,
+                source.with_suffix(".checkpoint.json"))}:
+            parser.error("Rescored shortlist output must not overwrite source, "
+                         "candidate, coverage, review or checkpoint files")
         try:
             count, changed = rescore_csv(source, target, coverage)
             people, _, has_coverage = review_files(target, coverage, review_target)
+            shortlist_count, priorities, _ = shortlist_files(
+                target, coverage, shortlist_target,
+                include_name_only=args.shortlist_include_name_only,
+            )
         except ValueError as exc:
             parser.error(str(exc))
         print(f"Offline rescoring: {count} candidate rows; {changed} scores changed -> {target}")
         print(f"Identity review: {people} relatives -> {review_target}")
+        print(f"Rescored research shortlist: {shortlist_count} relatives -> {shortlist_target}")
+        if priorities:
+            print("Priorities: " + ", ".join(
+                f"{key}={priorities[key]}" for key in sorted(priorities)
+            ))
         if not has_coverage:
             print("NOTE: Coverage CSV missing; the review omits unsearched people.")
         print("NOTE: This only re-scores existing candidate records; it cannot recover previously discarded matches.")
