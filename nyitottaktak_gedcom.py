@@ -20,6 +20,7 @@ import shutil
 import sys
 import time
 import unicodedata
+import zipfile
 from dataclasses import dataclass, field
 from datetime import date, datetime
 from difflib import SequenceMatcher
@@ -29,6 +30,8 @@ from urllib.parse import urlencode
 from urllib.request import Request, urlopen
 
 from review_report import review_files, write_review_report
+from hungarian_places import PlaceResolver
+from scripts.build_place_index import ensure_default_index
 
 API = "https://nyitottaktak.hu/api/search"
 API_META = "https://nyitottaktak.hu/api/meta"
@@ -261,6 +264,23 @@ def city_name(value: str) -> str:
     return DISTRICT_SUFFIX.sub("", city).strip()
 
 
+# A small explicit alias table avoids treating unrelated nearby towns as one.
+# Historical Hungarian and present-day Serbian names of the same locality.
+# Other differences in Hungarian accents already normalize via norm().
+PLACE_RESOLVER = PlaceResolver()
+
+
+def normalized_place_input(value: str) -> str:
+    """Remove district notation without losing historic country context."""
+    city = city_name(value)
+    return city + ("," + value.split(",", 1)[1] if "," in value else "")
+
+
+def normalized_city(value: str) -> str:
+    """Canonical named locality, with verified Hungarian exonyms when known."""
+    return norm(PLACE_RESOLVER.preferred_hungarian(normalized_place_input(value)))
+
+
 def clean_api_text(value: str, field_name: str) -> str:
     """Make a GEDCOM value compatible with the website's frontend validation.
 
@@ -280,8 +300,9 @@ def clean_api_text(value: str, field_name: str) -> str:
 
 
 def api_place(value: str) -> str:
-    """Search by city, not GEDCOM district (e.g. 'Budapest XI.' -> 'Budapest')."""
-    return clean_api_text(city_name(value), "szul_hely")
+    """Use city-level Hungarian archive names for known historical aliases."""
+    localized_city = PLACE_RESOLVER.preferred_hungarian(normalized_place_input(value))
+    return clean_api_text(localized_city, "szul_hely")
 
 
 def api_name(value: str, field_name: str = "nev") -> str:
@@ -366,10 +387,12 @@ def score(person: Person, archive: dict, names: list[str], mothers: list[str]) -
 
     # Apply the same city-level normalization when scoring; otherwise e.g.
     # "Pécs III." (GEDCOM) vs. "Pécs" (archive) only receives partial credit.
-    ged_place = norm(city_name(person.birthplace))
-    archive_place = norm(city_name(str(archive.get("szul_hely") or "")))
+    ged_place = normalized_city(person.birthplace)
+    archive_place = normalized_city(str(archive.get("szul_hely") or ""))
     if ged_place and archive_place:
-        if ged_place == archive_place:
+        if ged_place == archive_place or PLACE_RESOLVER.equivalent(
+                normalized_place_input(person.birthplace),
+                normalized_place_input(str(archive.get("szul_hely") or ""))):
             points += 10
             reasons.append("birthplace exact")
         elif ged_place in archive_place or archive_place in ged_place:
@@ -1060,6 +1083,72 @@ def run(args: argparse.Namespace) -> None:
           "or historical involvement. Check original documents before drawing conclusions.")
 
 
+def rescore_csv(source: Path, target: Path, coverage: Path) -> tuple[int, int]:
+    """Recalculate existing candidate rows offline without changing checkpoints.
+
+    The saved GEDCOM identity fields are sufficient to reproduce the scoring
+    applied to each already-accepted result. This cannot recover records that
+    were originally rejected by the score threshold or never returned by API.
+    """
+    if source.resolve() == target.resolve() or target.resolve() == coverage.resolve():
+        raise ValueError("Rescored output must not overwrite original candidates or coverage")
+    if not source.is_file():
+        raise ValueError(f"Candidate CSV not found: {source}")
+    with source.open("r", encoding="utf-8-sig", newline="") as handle:
+        reader = csv.DictReader(handle)
+        columns = reader.fieldnames or []
+        required = {
+            "gedcom_id", "gedcom_name", "gedcom_birth", "gedcom_birth_place",
+            "gedcom_mother", "archive_name", "archive_birth", "archive_birth_place",
+            "archive_mother", "match_score", "evidence", "review_priority",
+        }
+        if not required.issubset(set(columns)):
+            raise ValueError(f"Candidate CSV missing columns: {', '.join(sorted(required - set(columns)))}")
+        rows = list(reader)
+
+    changed = 0
+    for row in rows:
+        person = Person(
+            xref=row["gedcom_id"], born=row["gedcom_birth"],
+            birthplace=row["gedcom_birth_place"],
+        )
+        archive = {
+            "nev": row["archive_name"], "szul_ido": row["archive_birth"],
+            "szul_hely": row["archive_birth_place"],
+            "anyja_neve": row["archive_mother"],
+        }
+        mother_names_in_csv = [x.strip() for x in row["gedcom_mother"].split(";") if x.strip()]
+        score_value, evidence, _ = score(
+            person, archive, [row["gedcom_name"]], mother_names_in_csv)
+        try:
+            previous_score = int(row["match_score"])
+        except ValueError as exc:
+            raise ValueError(f"Invalid match score in {source}: {row['match_score']!r}") from exc
+        delta = score_value - previous_score
+        if delta:
+            changed += 1
+        row["previous_match_score"] = previous_score
+        row["score_change"] = delta
+        row["match_score"] = score_value
+        row["evidence"] = evidence
+        row["review_priority"] = (
+            "strong candidate" if score_value >= 85 else
+            "possible candidate" if score_value >= 60 else "weak candidate"
+        )
+
+    target.parent.mkdir(parents=True, exist_ok=True)
+    temporary = target.with_name(target.name + ".tmp")
+    fieldnames = columns + [name for name in ("previous_match_score", "score_change")
+                            if name not in columns]
+    rows.sort(key=lambda row: (-int(row["match_score"]), row["gedcom_id"], row.get("archive_guid", "")))
+    with temporary.open("w", newline="", encoding="utf-8-sig") as handle:
+        writer = csv.DictWriter(handle, fieldnames=fieldnames)
+        writer.writeheader()
+        writer.writerows(rows)
+    temporary.replace(target)
+    return len(rows), changed
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("gedcom", nargs="?", type=Path, help="Local .ged/.gedcom file")
@@ -1092,6 +1181,13 @@ def main() -> None:
     parser.add_argument("--output", type=Path, default=Path("nyitottaktak_matches.csv"))
     parser.add_argument("--cache-dir", type=Path, default=Path(".nyitottaktak_cache"))
     parser.add_argument("--refresh", action="store_true", help="Refresh cached API responses")
+    parser.add_argument("--place-index", type=Path, default=None,
+                        help="Custom local Hungarian place index CSV (overrides automatic default)")
+    parser.add_argument("--no-auto-place-index", action="store_true",
+                        help="Skip automatic GeoNames download on first executed scan; "
+                             "use built-in aliases if no local index exists")
+    parser.add_argument("--rescore-only", action="store_true",
+                        help="Recalculate existing candidate scores offline into a separate CSV; no GEDCOM or API calls")
     parser.add_argument("--review-only", action="store_true",
                         help="Build grouped candidate review from local CSVs without GEDCOM or network")
     parser.add_argument("--review-input", type=Path, default=None,
@@ -1116,12 +1212,56 @@ def main() -> None:
     if (args.delay < 0.5 or args.max_people < 0 or args.max_requests < 0 or
             args.min_score < 0 or args.year_tolerance < 0):
         parser.error("Use --delay >= 0.5, nonnegative budgets (0 = unlimited), score and tolerance")
+    global PLACE_RESOLVER
+    place_index = args.place_index
+    if place_index is None:
+        candidate_index = args.cache_dir / "hungarian_places.csv"
+        if candidate_index.is_file():
+            place_index = candidate_index
+        elif (args.execute and not args.no_auto_place_index and
+              not (args.check_updates or args.rescore_only or
+                   args.review_only or args.coverage_only)):
+            # Only actual archive scans can download additional data. Preview
+            # and offline/metadata-only commands preserve their no-GeoNames
+            # network guarantees. Check inputs before starting a download.
+            if args.gedcom is None or not args.gedcom.is_file():
+                parser.error(f"GEDCOM file not found: {args.gedcom}")
+            try:
+                place_index = ensure_default_index(args.cache_dir)
+            except (OSError, URLError, ValueError, zipfile.BadZipFile) as exc:
+                parser.error(
+                    "Automatic Hungarian place index setup failed: "
+                    f"{exc}. Retry, or use --no-auto-place-index to search "
+                    "with built-in place aliases only."
+                )
+    try:
+        PLACE_RESOLVER = PlaceResolver(place_index)
+    except (ValueError, OSError, csv.Error) as exc:
+        parser.error(str(exc))
+    if place_index is not None:
+        print(f"Hungarian place index: {place_index}")
     if args.check_updates:
         try:
             client = ApiClient(args.cache_dir, args.delay, args.max_requests, False)
             check_archive_update(client, args.cache_dir, required=True)
         except ValueError as exc:
             parser.error(str(exc))
+        return
+    if args.rescore_only:
+        source = args.review_input or args.output
+        coverage = args.review_coverage_input or source.with_suffix(".coverage.csv")
+        target = source.with_name(source.stem + ".rescored" + source.suffix)
+        review_target = target.with_suffix(".review.csv")
+        try:
+            count, changed = rescore_csv(source, target, coverage)
+            people, _, has_coverage = review_files(target, coverage, review_target)
+        except ValueError as exc:
+            parser.error(str(exc))
+        print(f"Offline rescoring: {count} candidate rows; {changed} scores changed -> {target}")
+        print(f"Identity review: {people} relatives -> {review_target}")
+        if not has_coverage:
+            print("NOTE: Coverage CSV missing; the review omits unsearched people.")
+        print("NOTE: This only re-scores existing candidate records; it cannot recover previously discarded matches.")
         return
     if args.review_only:
         source = args.review_input or args.output

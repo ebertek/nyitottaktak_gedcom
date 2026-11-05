@@ -22,6 +22,9 @@ python nyitottaktak_gedcom.py 'Family Tree.ged' \
 
 # Review the saved results without network access or a GEDCOM file
 python nyitottaktak_gedcom.py --review-only
+
+# Apply current identity-scoring rules to saved candidates, entirely offline
+python nyitottaktak_gedcom.py --rescore-only
 ```
 
 By default, the tool searches people born in **1850–1975** who have a usable surname and birth year. Use `--since` and `--until` to adjust the range, or `--include-undated` to include people with unknown birth years. People without surnames are skipped.
@@ -66,9 +69,28 @@ A scan checkpoints each processed relative. **Rerun the same search command to r
 
 `completed` means the configured queries finished without reported limitations—not that every historical record was found. `limited` can indicate broad (`too_many`) or rejected queries; `not_completed` means the person has not been fully processed.
 
+`--rescore-only` writes `nyitottaktak_matches.rescored.csv` and `nyitottaktak_matches.rescored.review.csv`. It does **not** contact the archive, read a GEDCOM, or modify the original matches, checkpoint, or coverage. The rescored CSV shows previous and new scores. It can only rescore **existing candidate rows**, not recover records excluded by the original score threshold.
+
 ## Search behavior
 
-The script uses names, birth dates, birthplaces and mothers' names from GEDCOM records. It prefers recorded birth names, supports structured `GIVN`/`SURN` and explicit aliases, and simplifies district-level birthplaces (for example, `Budapest XI.` → `Budapest`). It does not invent married names.
+The script uses names, birth dates, birthplaces and mothers' names from GEDCOM records. It prefers birth names, supports structured `GIVN`/`SURN` and explicit aliases, and simplifies district-level birthplaces (e.g. `Budapest XI` → `Budapest`). Hungarian accent variants and verified historical names are normalized; the original text remains in reports. It does not invent married names.
+
+### Hungarian names for places
+
+On its first **`--execute` scan**, the script automatically downloads and builds a Hungarian place-name index from [GeoNames](https://www.geonames.org/export/) (CC BY 4.0) if one is not already cached. The default covers Hungary, Romania, Slovakia, Serbia (**including Vojvodina**), Ukraine, Croatia, Austria and Slovenia. It uses geographic IDs and context to avoid merging distinct towns that share a name.
+
+The index is saved as `.nyitottaktak_cache/hungarian_places.csv` and reused by subsequent scans and local rescoring. Offline commands (`--review-only`, `--rescore-only`, `--coverage-only`, preview) never download GeoNames data. To build it in advance for offline rescoring, or to rebuild it after deleting the existing index:
+
+```bash
+python scripts/build_place_index.py --download
+
+# Optional: much larger worldwide index
+python scripts/build_place_index.py --world --download
+```
+
+Use `--place-index path/to/index.csv` for a custom file, or `--no-auto-place-index` to skip the initial download and use built-in aliases only when no index exists. If automatic setup fails, the scan stops with an explanation instead of silently reducing geographic coverage. An existing index is never downloaded again automatically.
+
+Historical aliases such as Szabadka/Subotica, Hódság/Odžaci, Péterréve/Bačko Petrovo Selo and Csák/Čakovci are included in the built-in fallback. GeoNames contains many more localities, but is **not an exhaustive historical gazetteer**. Re-scoring saved leads after an index update requires `--rescore-only`; discovering new records through different search terms requires an explicit `--refresh` scan.
 
 Searches are sequential and cached. Defaults are **30 people**, **250 HTTP requests per invocation**, and **1.5 seconds** between uncached requests. `--all` removes the local people and request caps; `--max-people 0` or `--max-requests 0` removes them separately. The minimum delay is 0.5 seconds. Server limits such as HTTP 403/429 and `too_many` remain in effect.
 
