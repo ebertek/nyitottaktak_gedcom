@@ -14,6 +14,8 @@ With the default `--output results/nyitottaktak_matches.csv`, these files are wr
 | `results/nyitottaktak_matches.audit.csv` | Offline score/evidence drift details for rows whose saved evidence differs from current scoring, or cannot be checked |
 | `results/nyitottaktak_matches.consistency.csv` | Private candidate-level historical chronology and shared-GUID review prompts |
 | `results/nyitottaktak_matches.shared-records.csv` | One private row per archive GUID associated with multiple distinct GEDCOM IDs |
+| `results/nyitottaktak_matches.collision-summary.csv` | Aggregate collision counts grouped by archive record type and independent identity-evidence class, with no names or person/GUID identifiers |
+| `results/nyitottaktak_matches.collision-triage.csv` | Private one-row-per-shared-GUID research queue distinguishing name-only overlaps from records with corroborated leads |
 | `results/nyitottaktak_matches.coverage.csv` | One row per selected person with search-completion status and warnings |
 | `results/nyitottaktak_matches.checkpoint.json` | Completed searches and their saved candidate rows, for safe resumption |
 | `results/nyitottaktak_matches.errors.txt` | Reported query errors/limitations, if any |
@@ -154,7 +156,33 @@ A shared GUID **does not prove** two GEDCOM people are the same person, nor that
 
 The grouped `*.review.csv` now appends `top_chronology_flags`, `best_evidence_chronology_flags`, `candidate_chronology_review_count`, `candidate_shared_archive_guid_count` and `best_evidence_archive_guid_shared_people`. The prioritized shortlist appends corresponding selected-lead and per-person alert fields. **These fields do not change identity scoring, evidence ranking, review ordering, candidate retention or checkpoints.**
 
-The audits are produced automatically by `--review-only`, `--shortlist-only`, `--rescore-only` and completed executed scans, or on demand using `--consistency-only`. `--consistency-output PATH` and `--shared-records-output PATH` customize the destinations; output collisions with candidate, checkpoint and standard report files are rejected in advance. These reports are **private**; never commit or share identifying detail CSVs.
+The audits are produced automatically by `--review-only`, `--shortlist-only`, `--rescore-only` and completed executed scans, or on demand using `--consistency-only`. `--consistency-output PATH` and `--shared-records-output PATH` customize the destinations; output collisions with candidate, checkpoint and standard report files are rejected in advance. These reports contain private identifiers; do not publish them. The newer collision-summary report described below is aggregate-only.
+
+## Evidence-aware collision triage and P5 identifier disagreements
+
+The same archived GUID can appear among several GEDCOM people. This is not automatically an error: a document may refer to more than one person, and name-only searches often produce coincidental overlaps. To investigate these systematically, `--consistency-only` now generates **two more offline reports** alongside the existing chronology and shared-GUID reports:
+
+```bash
+python nyitottaktak_gedcom.py --consistency-only \
+  --review-input results/nyitottaktak_matches.rescored.csv
+```
+
+- **`*.collision-summary.csv`** is an **aggregate-only table** grouped by `archive_record_type` and `evidence_classification`. It reports all retained candidate rows, distinct GEDCOM people, distinct nonempty archive GUIDs, shared-GUID candidate rows, and distinct shared GUID counts divided among the three collision profiles. It contains no names, person IDs or GUID values.
+- **`*.collision-triage.csv`** is a **private, per-GUID research queue**. It includes the original document URL, associated GEDCOM IDs, distinct people, source types, birth-year spread, and counts of people with each candidate evidence class. A person may have several evidence classes across duplicated saved candidate rows; per-class counts are therefore **not mutually exclusive**. This report should never be committed or published.
+
+Profiles use **per-candidate identity assessments**, with independent identifiers evaluated only within each person/archived-record comparison:
+
+| Profile | Meaning | Suggested research action |
+| --- | --- | --- |
+| `name_only_collision` | **Every** associated GEDCOM identity has only name-only candidates | Defer until independent identifiers or original document context are available |
+| `corroborated_lead_present` | At least **one** candidate row has partially or strongly corroborated identity attributes | Inspect the corroborated person–record comparison separately; do not assume the other GEDCOM identities match |
+| `other_ambiguous_collision` | Shared GUID with missing, conflicting or uninterpretable identity data, but no corroborated lead | Research individual identifiers; do not merge evidence from different people |
+
+Profile types are **mutually exclusive per GUID**. In the aggregate table, a shared GUID appearing under several source/evidence-class rows is counted in each relevant group: **do not add distinct-GUID columns across rows**. Retained candidate-row counts, in contrast, are additive. The total distinct GUID count remains the count in `*.collision-triage.csv`.
+
+**P5 conflict detail:** The prioritized shortlist now has `p5_conflict_birth_date`, `p5_conflict_mother`, `p5_conflict_birthplace` and `p5_conflict_count` for its **selected** P5 record. Its `next_research_step` explicitly identifies which original sources to compare. Separate `candidate_birth_date_conflicts`, `candidate_mother_conflicts` and `candidate_birthplace_conflicts` columns count conflicting *candidate rows across all records for that GEDCOM person*, and are also available in the grouped review. These counts can overlap; a single candidate can conflict on more than one field. **Never transfer a conflicting or agreeing identifier from one archive GUID to another.** P1/P2 classification and original heuristic scores remain unchanged.
+
+Use `--collision-summary-output PATH` and `--collision-triage-output PATH` to set custom destinations. The standard `--review-only`, `--shortlist-only`, `--rescore-only`, and executed scan workflows also regenerate collision reports. All findings are **identity-review prompts only**, not claims of recruitment or historical conduct.
 
 ## Coverage is not archival completeness
 
